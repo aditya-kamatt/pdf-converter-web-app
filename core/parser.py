@@ -1,4 +1,4 @@
- import re
+import re
 import logging
 from typing import List, Dict, Any
 
@@ -282,4 +282,4 @@ def extract_data_from_pdf(pdf_path: str):
     data_rows = rows[1:]
     df = pd.DataFrame(data_rows, columns=header)
     
-    return meta, df  ] 
+    return meta, df   
