@@ -254,7 +254,7 @@
     <div class="container">
         <div class="header">
             <h1>PDF to Excel Converter</h1>
-            <p>Convert your PDF order documents to Excel spreadsheets with automatic data extraction</p>
+            <!-- <p>Convert your PDF order documents to Excel spreadsheets with automatic data extraction</p> -->
         </div>
 
         <!-- Flash Messages -->
@@ -270,7 +270,7 @@
             {% endwith %}
         </div>
 
-        <form id="uploadForm" action="/convert" method="post" enctype="multipart/form-data">
+        <form id="uploadForm" enctype="multipart/form-data">
             <div class="upload-area" id="uploadArea">
                 <div class="upload-icon">📄</div>
                 <div class="upload-text">Drop your PDF file here</div>
@@ -368,7 +368,7 @@
         }
 
         // Form submission
-        uploadForm.addEventListener('submit', (e) => {
+          /* uploadForm.addEventListener('submit', (e) => {
             if (!fileInput.files[0]) {
                 e.preventDefault();
                 alert('Please select a PDF file first.');
@@ -394,13 +394,68 @@
                 clearInterval(progressInterval);
                 progressBar.style.width = '100%';
             }, 1000);
-        });
+          }); */
 
         // Click to upload
         uploadArea.addEventListener('click', (e) => {
             if (e.target.classList.contains('browse-btn')) return;
             fileInput.click();
         });
-    </script>
+        async function downloadFile(url, filename) {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error('Download failed');
+          const blob = await res.blob();
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          URL.revokeObjectURL(a.href);
+          a.remove();
+        }
+
+        function resetUI() {
+          convertBtn.disabled = false;
+          convertBtn.textContent = 'Convert to Excel';
+          loading.classList.remove('show');
+          progressContainer.style.display = 'none';
+          progressBar.style.width = '0%';
+        }
+
+        uploadForm.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          if (!fileInput.files[0]) {
+          alert('Please select a PDF file first.');
+          return;
+        }
+
+    // Show loading state
+    convertBtn.disabled = true;
+    convertBtn.textContent = 'Converting...';
+    loading.classList.add('show');
+    progressContainer.style.display = 'block';
+    progressBar.style.width = '60%';
+
+    try {
+      const fd = new FormData();
+      fd.append('file', fileInput.files[0]);
+
+      // Call Flask JSON API
+      const res = await fetch('/api/convert', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Conversion failed');
+
+      // Download the Excel, then reset
+      const base = fileInput.files[0].name.replace(/\.pdf$/i, '');
+      await downloadFile(data.download_url, `converted_${base}.xlsx`);
+    } 
+    catch (err) {
+      alert(err.message || err);
+     } 
+    finally {
+      resetUI();
+     }
+   });
+  </script>
 </body>
 </html>
