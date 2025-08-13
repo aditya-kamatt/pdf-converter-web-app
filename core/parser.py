@@ -1,285 +1,496 @@
+
+"""
+parser.py — Robust PDF parser for purchase orders.
+
+Public API:
+    extract_header_meta(pdf_path: str) -> dict
+    extract_table_rows(pdf_path: str) -> List[List[Any]]  # includes header row
+
+Strategy (in order):
+    1) Position-based reconstruction using pdfplumber.extract_words (best coverage)
+    2) Table extraction via pdfplumber.extract_tables (when tables are well-formed)
+    3) Regex fallback over normalized text (permissive; no hard dependency on PyPDF2)
+
+Dependencies:
+    pdfplumber (primary), openpyxl (only for your Excel writer, not used here).
+    PyPDF2 is optional (used only if available).
+"""
+from __future__ import annotations
+
 import re
 import logging
-from typing import List, Dict, Any
+from typing import List, Tuple, Dict, Any
 
-import pdfplumber
+logger = logging.getLogger(__name__)
 
+HEADER = [
+    "Qty",
+    "Item_SKU",
+    "Dev_Code",
+    "UPC",
+    "HTS_Code",
+    "Brand",
+    "Description",
+    "Rate",
+    "Amount",
+]
+
+
+# ==============================
+# Public API
+# ==============================
 
 def extract_header_meta(pdf_path: str) -> Dict[str, Any]:
-    """Extracts metadata from the first page of the PDF."""
+    """Extract key metadata from the first/last pages' text."""
+    pages = _extract_all_text(pdf_path)
+    page_count = len(pages)
+    first = pages[0] if pages else ""
+
+    def _pick(patterns: List[str], text: str) -> str | None:
+        for p in patterns:
+            m = re.search(p, text, flags=re.I)
+            if m:
+                return m.group(1).strip()
+        return None
+
+    po_number = _pick([r"PO\s*#?\s*(\d{4,})", r"Purchase\s+Order\s*#?\s*(\d{4,})"], first)
+    vendor_number = _pick([r"Vendor\s*#\s*(\d+)", r"Vendor\s*No\.?\s*(\d+)"], first)
+    ship_by_date = _pick([r"SHIP\s*(?:COMPLETE\s*)?BY\s*DATE:?\s*([\d/\-]{6,10})",
+                          r"Ship\s*By:?\s*([\d/\-]{6,10})"], first)
+    payment_terms = _pick([r"PAYMENT\s*TERMS:?\s*(.+)", r"Terms:?\s*(.+)"], first)
+
+    total = None
+    for t in reversed(pages):
+        m = re.search(r"Total\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", t, flags=re.I)
+        if m:
+            total = m.group(1)
+            break
+
+    return {
+        "po_number": po_number or "N/A",
+        "vendor_number": vendor_number or "N/A",
+        "ship_by_date": ship_by_date or "N/A",
+        "payment_terms": payment_terms or "N/A",
+        "total": total or "N/A",
+        "page_count": page_count,
+    }
+
+
+def extract_table_rows(pdf_path: str) -> List[List[Any]]:
+    """Return [HEADER] + data rows. Tries positions → tables → regex."""
+    # 1) Position-based
+    try:
+        rows = _extract_via_positions(pdf_path)
+        if _is_reasonable(rows):
+            logger.info("Position-based extraction: %d rows", len(rows) - 1)
+            return rows
+    except Exception as e:
+        logger.warning("Position-based extraction failed: %s", e)
+
+    # 2) Table extraction
+    try:
+        rows = _extract_via_tables(pdf_path)
+        if _is_reasonable(rows):
+            logger.info("Table extraction: %d rows", len(rows) - 1)
+            return rows
+    except Exception as e:
+        logger.warning("Table extraction failed: %s", e)
+
+    # 3) Regex fallback
+    try:
+        rows = _extract_via_regex(pdf_path)
+        if _is_reasonable(rows):
+            logger.info("Regex fallback extraction: %d rows", len(rows) - 1)
+            return rows
+    except Exception as e:
+        logger.error("Regex fallback failed: %s", e)
+
+    logger.error("No items extracted from %s", pdf_path)
+    return [HEADER]
+
+
+# ==============================
+# Position-based extraction
+# ==============================
+
+def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
+    import pdfplumber
+
+    out_rows: List[List[Any]] = []
+
     with pdfplumber.open(pdf_path) as pdf:
-        if not pdf.pages:
-            return {}
-        first_page = pdf.pages[0]
-        text = first_page.extract_text(x_tolerance=2, y_tolerance=2) or ""
+        for page in pdf.pages:
+            words = page.extract_words(keep_blank_chars=False, use_text_flow=True)
+            if not words:
+                continue
 
-        po_number_match = re.search(r'PO ?(\d{6,})', text)
-        ship_by_date_match = re.search(r'SHIP COMPLETE BY DATE:\s*(\d{1,2}/\d{1,2}/\d{4})', text)
-        payment_terms_match = re.search(r'PAYMENT TERMS:\s*(.*)', text)
+            header_y, col_x = _find_header_and_columns(words)
+            if header_y is None or not col_x:
+                # header not found; skip page
+                continue
 
-        vendor_number = "N/A"
-        lines = text.split('\n')
-        for i, line in enumerate(lines):
-            # Case where number is on the same line, e.g. "Vendor # 12345"
-            if "Vendor #" in line:
-                match = re.search(r'Vendor #\s*(\d+)', line)
-                if match:
-                    vendor_number = match.group(1)
-                    break
-                # Case where number is on the line below "Vendor #"
-                elif i + 1 < len(lines):
-                    next_line = lines[i+1].strip()
-                    # Match a line that starts with digits
-                    match = re.match(r'^(\d+)', next_line)
-                    if match:
-                        vendor_number = match.group(1)
+            # Group words below header into line bands by Y proximity
+            line_tol = 5.5  # points
+            bands: List[Tuple[float, List[dict]]] = []
+            for w in words:
+                cy = (w["top"] + w["bottom"]) / 2.0
+                if cy <= header_y:
+                    continue
+                placed = False
+                for i, (y, arr) in enumerate(bands):
+                    if abs(y - cy) <= line_tol:
+                        arr.append(w)
+                        bands[i] = (y, arr)
+                        placed = True
                         break
+                if not placed:
+                    bands.append((cy, [w]))
 
-        total_match = None
-        # Search for Total on the last few pages as it's typically at the end
-        for page in reversed(pdf.pages):
-            page_text = page.extract_text(x_tolerance=2, y_tolerance=2) or ""
-            total_match = re.search(r'Total\s+\$(\d{1,3}(?:,\d{3})*\.\d{2})', page_text)
-            if total_match:
-                break
+            bands.sort(key=lambda t: t[0])
 
-        meta = {
-            "po_number": po_number_match.group(1) if po_number_match else "N/A",
-            "vendor_number": vendor_number,
-            "ship_by_date": ship_by_date_match.group(1) if ship_by_date_match else "N/A",
-            "payment_terms": payment_terms_match.group(1).strip() if payment_terms_match else "N/A",
-            "total": total_match.group(1) if total_match else "N/A",
-            "page_count": len(pdf.pages)
-        }
-        return meta
+            pending = None  # last completed row for wrapped description merge
+            for _, arr in bands:
+                arr.sort(key=lambda d: d["x0"])
 
+                cells = {k: [] for k in col_x.keys()}
+                for w in arr:
+                    cx = (w["x0"] + w["x1"]) / 2.0
+                    col = _which_col(cx, col_x)
+                    if col:
+                        cells[col].append(w["text"])
 
-def extract_table_rows(pdf_path: str) -> List[List[str]]:
-    """
-    Extracts all table rows from all pages of the PDF.
-    Improved version to handle missing HTS codes and various formats.
-    """
-    logging.info("--- Starting table extraction ---")
-    header_columns: List[str] = []
-    header_line_text = ""
+                qty_s = " ".join(cells.get("qty", []))
+                sku_s = "".join(cells.get("sku", []))
+                dev_s = "".join(cells.get("dev", []))
+                upc_s = _first_match("".join(cells.get("upc", [])), r"\b\d{8,14}\b")
+                hts_s = _first_match("".join(cells.get("hts", [])), r"\b\d{8,12}\b")
+                branddesc = _clean_ws(" ".join(cells.get("branddesc", [])))
+                rate_s = "".join(cells.get("rate", []))
+                amount_s = "".join(cells.get("amount", []))
 
-    # 1. Find the canonical header text and columns from the first page with a valid header
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages, 1):
-            text = page.extract_text(x_tolerance=2, y_tolerance=2) or ""
-            if not text:
-                continue
-            for line in text.split('\n'):
-                if "Qty" in line and "Item SKU" in line:
-                    header_line_text = line.strip()
-                    header_columns = parse_header_line(header_line_text)
-                    logging.info(f"Found canonical header on page {page_num}: '{header_line_text}'")
-                    break
-            if header_columns:
-                break
+                has_key = bool(sku_s and upc_s)
 
-    if not header_columns:
-        logging.warning("Could not find a header row in the PDF. Aborting table extraction.")
-        return []
-
-    logging.info(f"Header parsed as: {header_columns}")
-
-    # 2. Collect all non-header/footer lines from all pages
-    all_content_lines = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages, 1):
-            text = page.extract_text(x_tolerance=2, y_tolerance=2) or ""
-            if not text:
-                continue
-
-            lines = text.split('\n')
-            for line in lines:
-                clean_line = line.strip()
-                # Skip blank lines, header lines, or footer-like lines
-                if not clean_line or \
-                   clean_line == header_line_text or \
-                   ("Qty" in clean_line and "Item SKU" in clean_line) or \
-                   "This Purchase Order" in clean_line or \
-                   "Page " in clean_line or \
-                   clean_line.startswith("Total") or \
-                   "TERMS:" in clean_line or \
-                   clean_line.startswith("PO001954") or \
-                   "of 17" in clean_line:
+                if not has_key and pending is not None and branddesc:
+                    # Continuation line → append to previous description
+                    pending[6] = _clean_ws((pending[6] or "") + " " + branddesc)
                     continue
-                all_content_lines.append(clean_line)
 
-    # 3. Join all content and parse with improved regex patterns
-    full_text = " ".join(all_content_lines)
-    logging.debug(f"Full text length: {len(full_text)} characters")
-    
-    # Multiple regex patterns to handle different formats
-    patterns = [
-        # Pattern 1: Complete with HTS Code
-        re.compile(
-            r"(\d+)\s+"                           # 1: Qty
-            r"([A-Z0-9-]+)\s+"                    # 2: Item SKU
-            r"([A-Z0-9]+)\s+"                     # 3: Dev Code
-            r"(\d{12})\s+"                        # 4: UPC (12 digits)
-            r"(\d{10})\s+"                        # 5: HTS Code (10 digits)
-            r"([A-Za-z][A-Za-z0-9\s&'-]+?)\s+"   # 6: Brand and Description (starts with letter)
-            r"(\$\d{1,3}(?:,\d{3})*\.\d{2})\s+"  # 7: Rate
-            r"(\$\d{1,3}(?:,\d{3})*\.\d{2})",    # 8: Amount
-            re.VERBOSE
-        ),
-        # Pattern 2: Missing HTS Code
-        re.compile(
-            r"(\d+)\s+"                           # 1: Qty
-            r"([A-Z0-9-]+)\s+"                    # 2: Item SKU
-            r"([A-Z0-9]+)\s+"                     # 3: Dev Code
-            r"(\d{12})\s+"                        # 4: UPC (12 digits)
-            r"([A-Za-z][A-Za-z0-9\s&'-]+?)\s+"   # 5: Brand and Description (no HTS)
-            r"(\$\d{1,3}(?:,\d{3})*\.\d{2})\s+"  # 6: Rate
-            r"(\$\d{1,3}(?:,\d{3})*\.\d{2})",    # 7: Amount
-            re.VERBOSE
-        )
-    ]
-    
-    final_rows: List[List[str]] = [header_columns]
-    found_items = set()  # To avoid duplicates
-    
-    for pattern_idx, pattern in enumerate(patterns):
-        matches = pattern.findall(full_text)
-        logging.info(f"Pattern {pattern_idx + 1} found {len(matches)} matches")
-        
-        for match in matches:
+                if not has_key:
+                    continue
+
+                qty = _to_int(qty_s)
+                rate = _to_float(rate_s)
+                amount = _to_float(amount_s)
+                if amount is None and (qty is not None) and (rate is not None):
+                    amount = round(qty * rate, 2)
+
+                brand, desc = "", branddesc
+                if branddesc:
+                    parts = branddesc.split(" ", 1)
+                    brand = parts[0]
+                    desc = parts[1] if len(parts) > 1 else ""
+
+                row = [
+                    qty if qty is not None else "",
+                    sku_s,
+                    dev_s,
+                    upc_s,
+                    hts_s,
+                    brand,
+                    desc,
+                    rate if rate is not None else "",
+                    amount if amount is not None else "",
+                ]
+                out_rows.append(row)
+                pending = row
+
+    # Dedupe by SKU|UPC, keep first (usually richer description)
+    seen = set()
+    deduped = []
+    for r in out_rows:
+        key = f"{str(r[1]).strip()}|{str(r[3]).strip()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+
+    return [HEADER] + deduped
+
+
+def _find_header_and_columns(words: List[dict]) -> Tuple[float | None, Dict[str, Tuple[float, float]]]:
+    # Cluster words by Y to find header band
+    tol = 4.0
+    bands: List[Tuple[float, List[dict]]] = []
+    for w in words:
+        cy = (w["top"] + w["bottom"]) / 2.0
+        placed = False
+        for i, (y, arr) in enumerate(bands):
+            if abs(y - cy) <= tol:
+                arr.append(w)
+                bands[i] = (y, arr)
+                placed = True
+                break
+        if not placed:
+            bands.append((cy, [w]))
+    bands.sort(key=lambda t: t[0])
+
+    header = None
+    for y, ws in bands[:12]:  # look near the top of the page
+        text = " ".join(w["text"].lower() for w in ws)
+        has_qty = "qty" in text
+        has_sku = ("item" in text and "sku" in text) or "item sku" in text or "sku" in text
+        has_upc = "upc" in text
+        has_price = ("rate" in text) or ("price" in text)
+        has_amount = ("amount" in text) or ("total" in text) or ("amt" in text)
+        if has_qty and has_sku and has_upc and (has_price or has_amount):
+            header = (y, ws)
+            break
+
+    if not header:
+        return None, {}
+
+    y, ws = header
+
+    def midx(w: dict) -> float:
+        return (w["x0"] + w["x1"]) / 2.0
+
+    centers = {}
+    for w in ws:
+        t = w["text"].lower()
+        if "qty" in t:
+            centers.setdefault("qty", []).append(midx(w))
+        if ("item" in t) or ("sku" in t):
+            centers.setdefault("sku", []).append(midx(w))
+        if "dev" in t:
+            centers.setdefault("dev", []).append(midx(w))
+        if "upc" in t:
+            centers.setdefault("upc", []).append(midx(w))
+        if "hts" in t:
+            centers.setdefault("hts", []).append(midx(w))
+        if "rate" in t or "price" in t:
+            centers.setdefault("rate", []).append(midx(w))
+        if "amount" in t or "total" in t or "amt" in t:
+            centers.setdefault("amount", []).append(midx(w))
+
+    centers = {k: sum(v) / len(v) for k, v in centers.items()}
+    if not centers:
+        return None, {}
+
+    ordered = sorted(centers.items(), key=lambda kv: kv[1])
+
+    ranges: Dict[str, Tuple[float, float]] = {}
+    for i, (name, cx) in enumerate(ordered):
+        left = (ordered[i - 1][1] + cx) / 2.0 if i > 0 else cx - 70
+        right = (ordered[i + 1][1] + cx) / 2.0 if i + 1 < len(ordered) else cx + 70
+        ranges[name] = (left, right)
+
+    # Brand/Description region between right edge of (hts|upc|dev|sku) and left edge of (rate|amount)
+    left_anchor = ranges.get("hts") or ranges.get("upc") or ranges.get("dev") or ranges.get("sku")
+    right_anchor = ranges.get("rate") or ranges.get("amount")
+    if left_anchor and right_anchor:
+        ranges["branddesc"] = (left_anchor[1], right_anchor[0])
+
+    return y, ranges
+
+
+def _which_col(x: float, col_x: Dict[str, Tuple[float, float]]) -> str | None:
+    for name, (l, r) in col_x.items():
+        if l <= x <= r:
+            return name
+    return None
+
+
+def _first_match(s: str, pat: str) -> str:
+    m = re.search(pat, s or "")
+    return m.group(0) if m else ""
+
+
+# ==============================
+# Table extraction (secondary)
+# ==============================
+
+def _extract_via_tables(pdf_path: str) -> List[List[Any]]:
+    import pdfplumber
+
+    settings = {
+        "vertical_strategy": "lines",
+        "horizontal_strategy": "lines",
+        "snap_tolerance": 3,
+        "intersection_tolerance": 3,
+        "min_words_vertical": 1,
+        "min_words_horizontal": 1,
+        "keep_blank_chars": False,
+        "text_tolerance": 2,
+        "join_tolerance": 2,
+    }
+
+    rows: List[List[Any]] = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
             try:
-                if pattern_idx == 0:  # Complete pattern with HTS
-                    qty, sku, dev_code, upc, hts_code, brand_desc, rate, amount = match
-                    
-                    # Split brand and description
-                    brand_desc_parts = brand_desc.strip().split(None, 1)
-                    brand = brand_desc_parts[0] if brand_desc_parts else ""
-                    description = brand_desc_parts[1] if len(brand_desc_parts) > 1 else ""
-                    
-                    # Create identifier to avoid duplicates
-                    identifier = f"{qty}-{sku}-{dev_code}-{upc}"
-                    if identifier in found_items:
-                        continue
-                    found_items.add(identifier)
-                    
-                    row = [
-                        qty, sku, dev_code, upc, hts_code,
-                        brand, description,
-                        rate.replace('$', '').replace(',', ''),
-                        amount.replace('$', '').replace(',', '')
-                    ]
-                    
-                elif pattern_idx == 1:  # Pattern without HTS
-                    qty, sku, dev_code, upc, brand_desc, rate, amount = match
-                    
-                    # Split brand and description
-                    brand_desc_parts = brand_desc.strip().split(None, 1)
-                    brand = brand_desc_parts[0] if brand_desc_parts else ""
-                    description = brand_desc_parts[1] if len(brand_desc_parts) > 1 else ""
-                    
-                    # Create identifier to avoid duplicates
-                    identifier = f"{qty}-{sku}-{dev_code}-{upc}"
-                    if identifier in found_items:
-                        continue
-                    found_items.add(identifier)
-                    
-                    row = [
-                        qty, sku, dev_code, upc, "",  # Empty HTS Code
-                        brand, description,
-                        rate.replace('$', '').replace(',', ''),
-                        amount.replace('$', '').replace(',', '')
-                    ]
-                
-                if len(row) != len(header_columns):
-                    logging.warning(f"Skipping malformed row: expected {len(header_columns)}, got {len(row)}")
+                tables = page.extract_tables(settings)
+            except Exception:
+                tables = []
+            for t in tables:
+                table_rows = [[_clean_ws(c) for c in row] for row in t if any(_clean_ws(c) for c in row)]
+                if not table_rows:
                     continue
-                
-                final_rows.append(row)
-                logging.debug(f"Added row: {row[:3]}...")  # Log first 3 fields
-                
-            except Exception as e:
-                logging.warning(f"Error processing match: {e}")
-                continue
 
-    logging.info(f"--- Finished table extraction. Found {len(final_rows) - 1} data rows. ---")
-    return final_rows
+                # find header row
+                header_idx = None
+                for i, r in enumerate(table_rows[:5]):
+                    label = " ".join(c.lower() for c in r)
+                    if ("qty" in label) and (("sku" in label) or ("item sku" in label)):
+                        header_idx = i
+                        break
+                if header_idx is None:
+                    continue
+
+                for r in table_rows[header_idx + 1:]:
+                    qty = _to_int(_safe_pick(r, 0))
+                    sku = _safe_pick(r, 1)
+                    dev = _safe_pick(r, 2)
+                    upc = _first_match(_safe_pick(r, 3) + " " + _safe_pick(r, 4), r"\b\d{8,14}\b")
+                    hts = _first_match(_safe_pick(r, 4) + " " + _safe_pick(r, 5), r"\b\d{8,12}\b")
+                    branddesc = _clean_ws((_safe_pick(r, 5) + " " + _safe_pick(r, 6)).strip())
+                    brand, desc = _split_brand_desc(branddesc)
+                    rate = _to_float(_safe_pick(r, -2))
+                    amount = _to_float(_safe_pick(r, -1))
+                    if amount is None and (qty is not None) and (rate is not None):
+                        amount = round(qty * rate, 2)
+
+                    rows.append([
+                        qty if qty is not None else "",
+                        sku, dev, upc, hts, brand, desc,
+                        rate if rate is not None else "",
+                        amount if amount is not None else "",
+                    ])
+
+    return [HEADER] + _dedupe(rows)
 
 
-def parse_header_line(header_text: str) -> List[str]:
-    """
-    Parses the header line to extract column names using a canonical list.
-    """
-    # Return the standard column structure
-    return [
-        "Qty", "Item_SKU", "Dev_Code", "UPC", "HTS_Code", 
-        "Brand", "Description", "Rate", "Amount"
-    ]
+def _safe_pick(row: List[str], idx: int) -> str:
+    try:
+        return _clean_ws(row[idx])
+    except Exception:
+        return ""
 
 
-def parse_order_line(line: str) -> List[str]:
-    """
-    Parses a block of text representing one item into a list of strings.
-    """
-    line = line.strip()
+def _split_brand_desc(s: str) -> Tuple[str, str]:
+    s = _clean_ws(s)
+    if not s:
+        return "", ""
+    parts = s.split(" ", 1)
+    return parts[0], (parts[1] if len(parts) > 1 else "")
 
-    # Try complete pattern first
-    pattern = re.compile(
-        r"(\d+)\s+"                       # 1: Qty
-        r"([A-Z0-9-]+)\s+"                # 2: Item SKU
-        r"([A-Z0-9]+)\s+"                 # 3: Dev Code
-        r"(\d{12})\s+"                    # 4: UPC
-        r"(\d{10})?\s*"                   # 5: HTS Code (optional)
-        r"(.+?)\s+"                       # 6: Brand and Description
-        r"(\$\d{1,3}(?:,\d{3})*\.\d{2})\s+" # 7: Rate
-        r"(\$\d{1,3}(?:,\d{3})*\.\d{2})"    # 8: Amount
+
+# ==============================
+# Regex fallback (permissive)
+# ==============================
+
+def _extract_via_regex(pdf_path: str) -> List[List[Any]]:
+    text = " ".join(_extract_all_text(pdf_path))
+    text = re.sub(r"\s+", " ", text)
+
+    # DEV/HTS optional; brand/desc greedy until first price
+    pat = re.compile(
+        r"(?P<qty>\d{1,4})\s+"
+        r"(?P<sku>[A-Z0-9-]{6,})\s+"
+        r"(?P<dev>[A-Z0-9]{2,})?\s*"
+        r"(?P<upc>\d{8,14})\s+"
+        r"(?P<hts>\d{8,12})?\s*"
+        r"(?P<branddesc>[A-Za-z][A-Za-z0-9&'\- ].*?)\s+"
+        r"\$?(?P<rate>\d{1,3}(?:,\d{3})*\.\d{2})\s+"
+        r"\$?(?P<amount>\d{1,3}(?:,\d{3})*\.\d{2})"
     )
-    match = pattern.search(line)
 
-    if not match:
-        return []
+    rows: List[List[Any]] = []
+    for m in pat.finditer(text):
+        d = m.groupdict()
+        qty = _to_int(d.get("qty"))
+        rate = _to_float(d.get("rate"))
+        amount = _to_float(d.get("amount"))
+        if amount is None and (qty is not None) and (rate is not None):
+            amount = round(qty * rate, 2)
 
-    # Separate brand and description
-    brand_and_desc = match.group(6).strip()
-    parts = brand_and_desc.split(" ", 1)
-    brand = parts[0]
-    description = parts[1] if len(parts) > 1 else ""
-    
-    rate = match.group(7).replace('$', '').replace(',', '')
-    amount = match.group(8).replace('$', '').replace(',', '')
-    hts_code = match.group(5) if match.group(5) else ""
+        brand, desc = _split_brand_desc(d.get("branddesc") or "")
+        rows.append([
+            qty if qty is not None else "",
+            _clean_ws(d.get("sku") or ""),
+            _clean_ws(d.get("dev") or ""),
+            _clean_ws(d.get("upc") or ""),
+            _clean_ws(d.get("hts") or ""),
+            brand, desc,
+            rate if rate is not None else "",
+            amount if amount is not None else "",
+        ])
 
-    return [
-        match.group(1),  # Qty
-        match.group(2),  # SKU
-        match.group(3),  # Dev
-        match.group(4),  # UPC
-        hts_code,        # HTS (may be empty)
-        brand,
-        description,
-        rate,
-        amount
-    ]
+    return [HEADER] + _dedupe(rows)
 
 
-def extract_data_from_pdf(pdf_path: str):
-    """
-    Main function to extract both metadata and table data from PDF.
-    Returns (meta_dict, dataframe)
-    """
-    import pandas as pd
-    
-    # Extract metadata
-    meta = extract_header_meta(pdf_path)
-    
-    # Extract table rows
-    rows = extract_table_rows(pdf_path)
-    
-    if not rows or len(rows) <= 1:
-        raise ValueError("No data rows found in PDF")
-    
-    # Convert to DataFrame
-    header = rows[0]
-    data_rows = rows[1:]
-    df = pd.DataFrame(data_rows, columns=header)
-    
-    return meta, df   
+# ==============================
+# Text extraction
+# ==============================
+
+def _extract_all_text(pdf_path: str) -> List[str]:
+    """Prefer pdfplumber; optionally fall back to PyPDF2 if present."""
+    pages: List[str] = []
+    try:
+        import pdfplumber
+        with pdfplumber.open(pdf_path) as pdf:
+            for p in pdf.pages:
+                pages.append(p.extract_text() or "")
+        return pages
+    except Exception as e:
+        logger.warning("pdfplumber text extraction failed: %s", e)
+
+    # Optional: PyPDF2 if available
+    try:
+        from PyPDF2 import PdfReader  # type: ignore
+        rdr = PdfReader(pdf_path)
+        for pg in rdr.pages:
+            pages.append(pg.extract_text() or "")
+    except Exception:
+        pass
+
+    return pages
+
+
+# ==============================
+# Common utilities
+# ==============================
+
+def _clean_ws(s: str | None) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+def _to_float(s: str | None) -> float | None:
+    if not s:
+        return None
+    try:
+        s2 = str(s).replace("$", "").replace(",", "").strip()
+        return float(s2)
+    except Exception:
+        return None
+
+def _to_int(s: str | None) -> int | None:
+    if not s:
+        return None
+    try:
+        n = re.sub(r"[^0-9-]", "", str(s))
+        return int(n) if n not in ("", "-") else None
+    except Exception:
+        return None
+
+def _dedupe(rows: List[List[Any]]) -> List[List[Any]]:
+    seen = set()
+    out = []
+    for r in rows:
+        key = f"{str(r[1]).strip()}|{str(r[3]).strip()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+def _is_reasonable(rows: List[List[Any]]) -> bool:
+    return isinstance(rows, list) and len(rows) >= 5  # header + >=4 items
