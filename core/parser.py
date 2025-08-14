@@ -1,20 +1,21 @@
-
 """
-parser.py — Robust PDF parser for purchase orders.
+parser.py — Robust PDF parser for purchase orders (hotfix).
+
+Fixes for edge-case layouts:
+- Brand/Description window starts at UPC (not HTS) to handle rows where HTS is blank.
+- Per-line fallback: if Brand/Description or Rate/Amount are empty after position bucketing,
+  recover them from the raw line text (substring between the UPC and the first price; last two
+  price-like tokens as Rate and Amount).
+- Accepts headers like "Unit Price" in addition to "Rate".
 
 Public API:
     extract_header_meta(pdf_path: str) -> dict
     extract_table_rows(pdf_path: str) -> List[List[Any]]  # includes header row
 
-Strategy (in order):
-    1) Position-based reconstruction using pdfplumber.extract_words (best coverage)
-    2) Table extraction via pdfplumber.extract_tables (when tables are well-formed)
-    3) Regex fallback over normalized text (permissive; no hard dependency on PyPDF2)
-
 Dependencies:
-    pdfplumber (primary), openpyxl (only for your Excel writer, not used here).
-    PyPDF2 is optional (used only if available).
+    pdfplumber (primary). PyPDF2 is optional (fallback only).
 """
+
 from __future__ import annotations
 
 import re
@@ -34,7 +35,6 @@ HEADER = [
     "Rate",
     "Amount",
 ]
-
 
 # ==============================
 # Public API
@@ -108,7 +108,6 @@ def extract_table_rows(pdf_path: str) -> List[List[Any]]:
     logger.error("No items extracted from %s", pdf_path)
     return [HEADER]
 
-
 # ==============================
 # Position-based extraction
 # ==============================
@@ -117,6 +116,7 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
     import pdfplumber
 
     out_rows: List[List[Any]] = []
+    money_pat = r"(?:USD\s*)?\$?\d{1,3}(?:,\d{3})*\.\d{2}"
 
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
@@ -126,11 +126,10 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
 
             header_y, col_x = _find_header_and_columns(words)
             if header_y is None or not col_x:
-                # header not found; skip page
                 continue
 
-            # Group words below header into line bands by Y proximity
-            line_tol = 5.5  # points
+            # Group words into line bands below header
+            line_tol = 5.5
             bands: List[Tuple[float, List[dict]]] = []
             for w in words:
                 cy = (w["top"] + w["bottom"]) / 2.0
@@ -145,13 +144,11 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
                         break
                 if not placed:
                     bands.append((cy, [w]))
-
             bands.sort(key=lambda t: t[0])
 
-            pending = None  # last completed row for wrapped description merge
+            pending = None
             for _, arr in bands:
                 arr.sort(key=lambda d: d["x0"])
-
                 cells = {k: [] for k in col_x.keys()}
                 for w in arr:
                     cx = (w["x0"] + w["x1"]) / 2.0
@@ -170,8 +167,33 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
 
                 has_key = bool(sku_s and upc_s)
 
+                # Raw line text for fallback recovery
+                raw_line = " ".join(w["text"] for w in arr)
+
+                # ---- Fallback 1: recover prices from the raw line if empty ----
+                prices = re.findall(money_pat, raw_line)
+                rate = _to_float(rate_s) if rate_s else None
+                amount = _to_float(amount_s) if amount_s else None
+                if (rate is None or amount is None) and prices:
+                    if len(prices) >= 2:
+                        if rate is None:
+                            rate = _to_float(prices[-2])
+                        if amount is None:
+                            amount = _to_float(prices[-1])
+                    elif len(prices) == 1 and amount is None:
+                        amount = _to_float(prices[-1])
+
+                # ---- Fallback 2: brand/desc between UPC and first price on the raw line ----
+                if not branddesc and upc_s and prices:
+                    m_upc = re.search(r"\b" + re.escape(upc_s) + r"\b", raw_line)
+                    m_price = re.search(money_pat, raw_line)
+                    if m_upc and m_price and m_price.start() > m_upc.end():
+                        seg = raw_line[m_upc.end():m_price.start()]
+                        seg = re.sub(r"\s{2,}", " ", seg).strip()
+                        if seg:
+                            branddesc = seg
+
                 if not has_key and pending is not None and branddesc:
-                    # Continuation line → append to previous description
                     pending[6] = _clean_ws((pending[6] or "") + " " + branddesc)
                     continue
 
@@ -179,11 +201,10 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
                     continue
 
                 qty = _to_int(qty_s)
-                rate = _to_float(rate_s)
-                amount = _to_float(amount_s)
                 if amount is None and (qty is not None) and (rate is not None):
                     amount = round(qty * rate, 2)
 
+                # Split brand/desc
                 brand, desc = "", branddesc
                 if branddesc:
                     parts = branddesc.split(" ", 1)
@@ -204,21 +225,11 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
                 out_rows.append(row)
                 pending = row
 
-    # Dedupe by SKU|UPC, keep first (usually richer description)
-    seen = set()
-    deduped = []
-    for r in out_rows:
-        key = f"{str(r[1]).strip()}|{str(r[3]).strip()}"
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-
-    return [HEADER] + deduped
+    return [HEADER] + _dedupe(out_rows)
 
 
 def _find_header_and_columns(words: List[dict]) -> Tuple[float | None, Dict[str, Tuple[float, float]]]:
-    # Cluster words by Y to find header band
+    """Identify header band and build x-ranges for columns. Brand/Desc spans from UPC to Rate/Amount."""
     tol = 4.0
     bands: List[Tuple[float, List[dict]]] = []
     for w in words:
@@ -235,12 +246,12 @@ def _find_header_and_columns(words: List[dict]) -> Tuple[float | None, Dict[str,
     bands.sort(key=lambda t: t[0])
 
     header = None
-    for y, ws in bands[:12]:  # look near the top of the page
+    for y, ws in bands[:14]:  # near top
         text = " ".join(w["text"].lower() for w in ws)
         has_qty = "qty" in text
         has_sku = ("item" in text and "sku" in text) or "item sku" in text or "sku" in text
         has_upc = "upc" in text
-        has_price = ("rate" in text) or ("price" in text)
+        has_price = ("rate" in text) or ("price" in text) or ("unit price" in text)
         has_amount = ("amount" in text) or ("total" in text) or ("amt" in text)
         if has_qty and has_sku and has_upc and (has_price or has_amount):
             header = (y, ws)
@@ -267,7 +278,7 @@ def _find_header_and_columns(words: List[dict]) -> Tuple[float | None, Dict[str,
             centers.setdefault("upc", []).append(midx(w))
         if "hts" in t:
             centers.setdefault("hts", []).append(midx(w))
-        if "rate" in t or "price" in t:
+        if "rate" in t or "price" in t or "unit price" in t:
             centers.setdefault("rate", []).append(midx(w))
         if "amount" in t or "total" in t or "amt" in t:
             centers.setdefault("amount", []).append(midx(w))
@@ -284,8 +295,8 @@ def _find_header_and_columns(words: List[dict]) -> Tuple[float | None, Dict[str,
         right = (ordered[i + 1][1] + cx) / 2.0 if i + 1 < len(ordered) else cx + 70
         ranges[name] = (left, right)
 
-    # Brand/Description region between right edge of (hts|upc|dev|sku) and left edge of (rate|amount)
-    left_anchor = ranges.get("hts") or ranges.get("upc") or ranges.get("dev") or ranges.get("sku")
+    # Brand/Desc region: start at UPC (then HTS/dev/sku) and end at Rate/Amount
+    left_anchor = ranges.get("upc") or ranges.get("hts") or ranges.get("dev") or ranges.get("sku")
     right_anchor = ranges.get("rate") or ranges.get("amount")
     if left_anchor and right_anchor:
         ranges["branddesc"] = (left_anchor[1], right_anchor[0])
@@ -303,7 +314,6 @@ def _which_col(x: float, col_x: Dict[str, Tuple[float, float]]) -> str | None:
 def _first_match(s: str, pat: str) -> str:
     m = re.search(pat, s or "")
     return m.group(0) if m else ""
-
 
 # ==============================
 # Table extraction (secondary)
@@ -368,22 +378,6 @@ def _extract_via_tables(pdf_path: str) -> List[List[Any]]:
 
     return [HEADER] + _dedupe(rows)
 
-
-def _safe_pick(row: List[str], idx: int) -> str:
-    try:
-        return _clean_ws(row[idx])
-    except Exception:
-        return ""
-
-
-def _split_brand_desc(s: str) -> Tuple[str, str]:
-    s = _clean_ws(s)
-    if not s:
-        return "", ""
-    parts = s.split(" ", 1)
-    return parts[0], (parts[1] if len(parts) > 1 else "")
-
-
 # ==============================
 # Regex fallback (permissive)
 # ==============================
@@ -391,17 +385,16 @@ def _split_brand_desc(s: str) -> Tuple[str, str]:
 def _extract_via_regex(pdf_path: str) -> List[List[Any]]:
     text = " ".join(_extract_all_text(pdf_path))
     text = re.sub(r"\s+", " ", text)
+    money_pat = r"(?:USD\s*)?\$?\d{1,3}(?:,\d{3})*\.\d{2}"
 
-    # DEV/HTS optional; brand/desc greedy until first price
     pat = re.compile(
         r"(?P<qty>\d{1,4})\s+"
-        r"(?P<sku>[A-Z0-9-]{6,})\s+"
+        r"(?P<sku>[A-Z0-9]{1}[A-Z]{2}\d{4}-\d{2}-[A-Z]\d{4}-[A-Z0-9]{5})\s+"
         r"(?P<dev>[A-Z0-9]{2,})?\s*"
         r"(?P<upc>\d{8,14})\s+"
-        r"(?P<hts>\d{8,12})?\s*"
-        r"(?P<branddesc>[A-Za-z][A-Za-z0-9&'\- ].*?)\s+"
-        r"\$?(?P<rate>\d{1,3}(?:,\d{3})*\.\d{2})\s+"
-        r"\$?(?P<amount>\d{1,3}(?:,\d{3})*\.\d{2})"
+        r"(?P<branddesc>.+?)\s+"
+        r"(?P<rate>" + money_pat + r")\s+"
+        r"(?P<amount>" + money_pat + r")"
     )
 
     rows: List[List[Any]] = []
@@ -419,7 +412,7 @@ def _extract_via_regex(pdf_path: str) -> List[List[Any]]:
             _clean_ws(d.get("sku") or ""),
             _clean_ws(d.get("dev") or ""),
             _clean_ws(d.get("upc") or ""),
-            _clean_ws(d.get("hts") or ""),
+            "",  # HTS often not printed on rows
             brand, desc,
             rate if rate is not None else "",
             amount if amount is not None else "",
@@ -427,9 +420,8 @@ def _extract_via_regex(pdf_path: str) -> List[List[Any]]:
 
     return [HEADER] + _dedupe(rows)
 
-
 # ==============================
-# Text extraction
+# Text & utilities
 # ==============================
 
 def _extract_all_text(pdf_path: str) -> List[str]:
@@ -443,34 +435,31 @@ def _extract_all_text(pdf_path: str) -> List[str]:
         return pages
     except Exception as e:
         logger.warning("pdfplumber text extraction failed: %s", e)
-
-    # Optional: PyPDF2 if available
     try:
-        from PyPDF2 import PdfReader  # type: ignore
+        from PyPDF2 import PdfReader  # optional
         rdr = PdfReader(pdf_path)
         for pg in rdr.pages:
             pages.append(pg.extract_text() or "")
     except Exception:
         pass
-
     return pages
 
 
-# ==============================
-# Common utilities
-# ==============================
-
 def _clean_ws(s: str | None) -> str:
     return re.sub(r"\s+", " ", (s or "").strip())
+
 
 def _to_float(s: str | None) -> float | None:
     if not s:
         return None
     try:
         s2 = str(s).replace("$", "").replace(",", "").strip()
+        if s2.upper().startswith("USD"):
+            s2 = s2[3:].strip()
         return float(s2)
     except Exception:
         return None
+
 
 def _to_int(s: str | None) -> int | None:
     if not s:
@@ -480,6 +469,7 @@ def _to_int(s: str | None) -> int | None:
         return int(n) if n not in ("", "-") else None
     except Exception:
         return None
+
 
 def _dedupe(rows: List[List[Any]]) -> List[List[Any]]:
     seen = set()
@@ -492,5 +482,21 @@ def _dedupe(rows: List[List[Any]]) -> List[List[Any]]:
         out.append(r)
     return out
 
+
+def _safe_pick(row: List[str], idx: int) -> str:
+    try:
+        return _clean_ws(row[idx])
+    except Exception:
+        return ""
+
+
+def _split_brand_desc(s: str) -> Tuple[str, str]:
+    s = _clean_ws(s)
+    if not s:
+        return "", ""
+    parts = s.split(" ", 1)
+    return parts[0], (parts[1] if len(parts) > 1 else "")
+
+
 def _is_reasonable(rows: List[List[Any]]) -> bool:
-    return isinstance(rows, list) and len(rows) >= 5  # header + >=4 items
+    return isinstance(rows, list) and len(rows) >= 5
