@@ -95,7 +95,7 @@ def write_to_excel(
     meta: dict,
     output_path: str,
     *,
-    layout: str = "standard",
+    layout: str = "sizesheet",
 ) -> None:
     """
     Write an Excel workbook with a Summary sheet and either:

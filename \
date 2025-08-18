@@ -1,0 +1,46 @@
+###     System      ###
+alias sup='sudo apt update && sudo apt upgrade'
+alias goodnight='sudo shutdown -h now'
+alias seeyoulater='sudo systemctl reboot'
+
+###     ZSH     ###
+alias zshconfig='nvim ~/.zshrc'
+alias zshaliases='nvim ~/.oh-my-zsh/custom/aliases.zsh'
+alias zshsource='source ~/.zshrc'
+alias zshcustom='cd ~/.oh-my-zsh/custom'
+alias zshfunctions='nvim ~/.oh-my-zsh/custom/functions.zsh'
+
+###     Virtual Environments      ###
+alias mkvenv='python3 -m venv .venv && source .venv/bin/activate'
+alias venv='source .venv/bin/activate'
+
+###     Projects      ###
+alias ims='cd Projects/"Sample IMS"'
+alias pdfapp='cd Projects/"pdf-converter-web-app"'
+
+###     Neo4j     ###
+alias neo4jdesktop='/home/aditya/Neo4j/neo4jdesktop.AppImage &'
+alias neo4jstart='sudo neo4j start'
+alias neo4jstatus='sudo systemctl status neo4j'
+alias neo4jstop='sudo neo4j stop'
+
+###     Fuzzy Finder      ###
+alias fzfdir='find . -maxdepth 1 -type d ! -name . | fzf '
+#alias fcd='fzf --bind "enter:execute:cd {}+abort" --preview "ls -la {}"'
+
+###     Brave Browser     ###
+alias brave='brave-browser'
+
+###     TMUX      ###
+alias tconf='nvim ~/.tmux.conf'
+alias tsource='tmux source-file ~/.tmux.conf'
+alias ts='tmux new -As'
+alias tls='tmux ls'
+alias tk='tmux kill-session -t'
+alias ta='tmux attach -t'
+
+###     Neovim      ###
+alias nvimconfig='nvim ~/.config/nvim/lua/custom/chadrc.lua'
+
+###     GitHub      ###
+alias gitcheck='ssh -T git@github.com'
