@@ -5,256 +5,62 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PDF to Excel Converter</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
+            min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;
         }
-
-        .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-            padding: 40px;
-            max-width: 600px;
-            width: 100%;
-            text-align: center;
-        }
-
-        .header {
-            margin-bottom: 30px;
-        }
-
+        .container { background: white; border-radius: 20px; box-shadow: 0 20px 40px rgba(0,0,0,.1); padding: 40px; max-width: 650px; width: 100%; text-align: center; }
+        .header { margin-bottom: 30px; }
         .header h1 {
-            color: #333;
-            font-size: 2.5rem;
-            margin-bottom: 10px;
+            color: #333; font-size: 2.5rem; margin-bottom: 10px;
             background: linear-gradient(135deg, #667eea, #764ba2);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
         }
+        .upload-area { border: 3px dashed #667eea; border-radius: 15px; padding: 40px 20px; margin: 30px 0; transition: all .3s ease; position: relative; overflow: hidden; }
+        .upload-area:hover { border-color: #764ba2; background: rgba(102,126,234,.05); }
+        .upload-area.dragover { border-color: #764ba2; background: rgba(102,126,234,.1); transform: scale(1.02); }
+        .upload-icon { font-size: 3rem; color: #667eea; margin-bottom: 15px; }
+        .upload-text { color: #333; font-size: 1.2rem; margin-bottom: 15px; }
+        .upload-subtext { color: #666; font-size: .9rem; margin-bottom: 20px; }
+        .file-input { display: none; }
+        .browse-btn { background: linear-gradient(135deg,#667eea,#764ba2); color:#fff; border:none; padding:12px 30px; border-radius:25px; font-size:1rem; cursor:pointer; transition:all .3s; margin:10px 5px; }
+        .browse-btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102,126,234,.4); }
+        .convert-btn { background: linear-gradient(135deg,#56ab2f,#a8e6cf); color:#fff; border:none; padding:15px 40px; border-radius:25px; font-size:1.1rem; cursor:pointer; transition:all .3s; margin-top:20px; display:none; }
+        .convert-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(86,171,47,.4); }
+        .convert-btn:disabled { opacity:.6; cursor:not-allowed; }
+        .file-info { background:#f8f9fa; border-radius:10px; padding:15px; margin:20px 0; display:none; }
+        .file-info.show { display:block; animation: slideIn .3s ease; }
+        @keyframes slideIn { from{opacity:0; transform: translateY(-10px);} to{opacity:1; transform: translateY(0);} }
+        .progress-container { width:100%; background:#e0e0e0; border-radius:10px; overflow:hidden; margin:20px 0; display:none; }
+        .progress-bar { height:8px; background:linear-gradient(90deg,#667eea,#764ba2); border-radius:10px; transition:width .3s ease; width:0%; }
+        .flash-messages { margin-bottom: 20px; }
+        .flash-message { padding:12px 20px; border-radius:8px; margin-bottom:10px; font-weight:500; }
+        .flash-error { background:#fee; border:1px solid #fcc; color:#c33; }
+        .flash-success { background:#efe; border:1px solid #cfc; color:#3c3; }
+        .features { margin-top:30px; text-align:left; }
+        .features h3 { color:#333; margin-bottom:15px; text-align:center; }
+        .feature-list { list-style:none; padding:0; }
+        .feature-list li { padding:8px 0; color:#666; position:relative; padding-left:25px; }
+        .feature-list li:before { content:"✓"; color:#56ab2f; font-weight:bold; position:absolute; left:0; }
+        .loading { display:none; align-items:center; justify-content:center; margin:20px 0; }
+        .loading.show { display:flex; }
+        .spinner { width:40px; height:40px; border:4px solid #e0e0e0; border-top:4px solid #667eea; border-radius:50%; animation:spin 1s linear infinite; margin-right:15px; }
+        @keyframes spin { 0%{transform:rotate(0deg);} 100%{transform:rotate(360deg);} }
 
-        .header p {
-            color: #666;
-            font-size: 1.1rem;
-            line-height: 1.6;
-        }
-
-        .upload-area {
-            border: 3px dashed #667eea;
-            border-radius: 15px;
-            padding: 40px 20px;
-            margin: 30px 0;
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .upload-area:hover {
-            border-color: #764ba2;
-            background: rgba(102, 126, 234, 0.05);
-        }
-
-        .upload-area.dragover {
-            border-color: #764ba2;
-            background: rgba(102, 126, 234, 0.1);
-            transform: scale(1.02);
-        }
-
-        .upload-icon {
-            font-size: 3rem;
-            color: #667eea;
-            margin-bottom: 15px;
-        }
-
-        .upload-text {
-            color: #333;
-            font-size: 1.2rem;
-            margin-bottom: 15px;
-        }
-
-        .upload-subtext {
-            color: #666;
-            font-size: 0.9rem;
-            margin-bottom: 20px;
-        }
-
-        .file-input {
-            display: none;
-        }
-
-        .browse-btn {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white;
-            border: none;
-            padding: 12px 30px;
-            border-radius: 25px;
-            font-size: 1rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin: 10px 5px;
-        }
-
-        .browse-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-
-        .convert-btn {
-            background: linear-gradient(135deg, #56ab2f, #a8e6cf);
-            color: white;
-            border: none;
-            padding: 15px 40px;
-            border-radius: 25px;
-            font-size: 1.1rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin-top: 20px;
-            display: none;
-        }
-
-        .convert-btn:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(86, 171, 47, 0.4);
-        }
-
-        .convert-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        .file-info {
-            background: #f8f9fa;
-            border-radius: 10px;
-            padding: 15px;
-            margin: 20px 0;
-            display: none;
-        }
-
-        .file-info.show {
-            display: block;
-            animation: slideIn 0.3s ease;
-        }
-
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .progress-container {
-            width: 100%;
-            background: #e0e0e0;
-            border-radius: 10px;
-            overflow: hidden;
-            margin: 20px 0;
-            display: none;
-        }
-
-        .progress-bar {
-            height: 8px;
-            background: linear-gradient(90deg, #667eea, #764ba2);
-            border-radius: 10px;
-            transition: width 0.3s ease;
-            width: 0%;
-        }
-
-        .flash-messages {
-            margin-bottom: 20px;
-        }
-
-        .flash-message {
-            padding: 12px 20px;
-            border-radius: 8px;
-            margin-bottom: 10px;
-            font-weight: 500;
-        }
-
-        .flash-error {
-            background: #fee;
-            border: 1px solid #fcc;
-            color: #c33;
-        }
-
-        .flash-success {
-            background: #efe;
-            border: 1px solid #cfc;
-            color: #3c3;
-        }
-
-        .features {
-            margin-top: 30px;
-            text-align: left;
-        }
-
-        .features h3 {
-            color: #333;
-            margin-bottom: 15px;
-            text-align: center;
-        }
-
-        .feature-list {
-            list-style: none;
-            padding: 0;
-        }
-
-        .feature-list li {
-            padding: 8px 0;
-            color: #666;
-            position: relative;
-            padding-left: 25px;
-        }
-
-        .feature-list li:before {
-            content: "✓";
-            color: #56ab2f;
-            font-weight: bold;
-            position: absolute;
-            left: 0;
-        }
-
-        .loading {
-            display: none;
-            align-items: center;
-            justify-content: center;
-            margin: 20px 0;
-        }
-
-        .loading.show {
-            display: flex;
-        }
-
-        .spinner {
-            width: 40px;
-            height: 40px;
-            border: 4px solid #e0e0e0;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-right: 15px;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
+        /* New: layout switcher */
+        .layout-fieldset { margin-top: 10px; text-align: left; background: #f8f9ff; border: 1px solid #e6e8ff; border-radius: 12px; padding: 14px; }
+        .layout-legend { font-weight: 700; color: #333; font-size: 0.95rem; padding: 0 6px; }
+        .layout-option { display:flex; align-items:center; gap:10px; margin:8px 0; color:#444; }
+        .layout-option input { transform: translateY(1px); }
+        .layout-hint { color:#666; font-size:.85rem; margin-left:26px; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>PDF to Excel Converter</h1>
-            <!-- <p>Convert your PDF order documents to Excel spreadsheets with automatic data extraction</p> -->
         </div>
 
         <!-- Flash Messages -->
@@ -286,6 +92,21 @@
                 <strong>Size:</strong> <span id="fileSize"></span>
             </div>
 
+            <!-- Output format switcher -->
+            <fieldset class="layout-fieldset" aria-label="Output format">
+                <legend class="layout-legend">Output format</legend>
+                <label class="layout-option" title="One row per product, quantities in size columns">
+                    <input type="radio" name="layout" value="product_sizesheet" checked>
+                    <span><strong>Sizesheet</strong></span>
+                </label>
+                <!--<div class="layout-hint">Great for summaries: combines same product into a single row.</div>-->
+
+                <label class="layout-option" title="Flat list of every line from the PDF">
+                    <input type="radio" name="layout" value="standard">
+                    <span><strong>Standard</strong> </span>
+                </label>
+            </fieldset>
+
             <div class="loading" id="loading">
                 <div class="spinner"></div>
                 <span>Processing your PDF... This may take a moment.</span>
@@ -299,8 +120,6 @@
                 Convert to Excel
             </button>
         </form>
-
-
     </div>
 
     <script>
@@ -315,147 +134,96 @@
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progressBar');
 
-        // Drag and drop functionality
-        uploadArea.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadArea.classList.add('dragover');
-        });
-
-        uploadArea.addEventListener('dragleave', () => {
-            uploadArea.classList.remove('dragover');
-        });
-
+        // Drag and drop
+        uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+        uploadArea.addEventListener('dragleave', () => { uploadArea.classList.remove('dragover'); });
         uploadArea.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadArea.classList.remove('dragover');
-            
+            e.preventDefault(); uploadArea.classList.remove('dragover');
             const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                fileInput.files = files;
-                handleFileSelect();
-            }
+            if (files.length > 0) { fileInput.files = files; handleFileSelect(); }
         });
 
-        // File selection
+        // File select
         fileInput.addEventListener('change', handleFileSelect);
-
         function handleFileSelect() {
             const file = fileInput.files[0];
-            if (file) {
-                if (file.type !== 'application/pdf') {
-                    alert('Please select a PDF file.');
-                    return;
-                }
-
-                if (file.size > 16 * 1024 * 1024) {
-                    alert('File too large. Maximum size is 16MB.');
-                    return;
-                }
-
-                fileName.textContent = file.name;
-                fileSize.textContent = formatFileSize(file.size);
-                fileInfo.classList.add('show');
-                convertBtn.style.display = 'inline-block';
-            }
+            if (!file) return;
+            if (file.type !== 'application/pdf') { alert('Please select a PDF file.'); return; }
+            if (file.size > 16 * 1024 * 1024) { alert('File too large. Maximum size is 16MB.'); return; }
+            fileName.textContent = file.name;
+            fileSize.textContent = formatFileSize(file.size);
+            fileInfo.classList.add('show');
+            convertBtn.style.display = 'inline-block';
         }
 
         function formatFileSize(bytes) {
             if (bytes === 0) return '0 Bytes';
-            const k = 1024;
-            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const k = 1024, sizes = ['Bytes', 'KB', 'MB', 'GB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
 
-        // Form submission
-          /* uploadForm.addEventListener('submit', (e) => {
-            if (!fileInput.files[0]) {
-                e.preventDefault();
-                alert('Please select a PDF file first.');
-                return;
-            }
+        // Helpers
+        async function downloadFile(url, filename) {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('Download failed');
+            const blob = await res.blob();
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            URL.revokeObjectURL(a.href);
+            a.remove();
+        }
+        function resetUI() {
+            convertBtn.disabled = false;
+            convertBtn.textContent = 'Convert to Excel';
+            loading.classList.remove('show');
+            progressContainer.style.display = 'none';
+            progressBar.style.width = '0%';
+        }
+        const getSelectedLayout = () => (document.querySelector('input[name="layout"]:checked')?.value || 'product_sizesheet');
+
+        // Submit
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!fileInput.files[0]) { alert('Please select a PDF file first.'); return; }
 
             // Show loading state
+            const selLayout = getSelectedLayout();
             convertBtn.disabled = true;
-            convertBtn.textContent = 'Converting...';
+            convertBtn.textContent = `Converting… (${selLayout === 'standard' ? 'Standard' : 'Product SizeSheet'})`;
             loading.classList.add('show');
             progressContainer.style.display = 'block';
+            progressBar.style.width = '60%';
 
-            // Simulate progress (since we can't track real progress easily)
-            let progress = 0;
-            const progressInterval = setInterval(() => {
-                progress += Math.random() * 15;
-                if (progress > 90) progress = 90;
-                progressBar.style.width = progress + '%';
-            }, 500);
+            try {
+                const fd = new FormData();
+                fd.append('file', fileInput.files[0]);
+                fd.append('layout', selLayout); // <-- send layout to backend
 
-            // Clean up progress when form actually submits
-            setTimeout(() => {
-                clearInterval(progressInterval);
-                progressBar.style.width = '100%';
-            }, 1000);
-          }); */
+                // Call Flask JSON API
+                const res = await fetch('/api/convert', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Conversion failed');
+
+                // Build download name (prefer server-reported layout)
+                const base = fileInput.files[0].name.replace(/\.pdf$/i, '');
+                const layoutUsed = (data.layout || selLayout);
+                await downloadFile(data.download_url, `converted_${layoutUsed}_${base}.xlsx`);
+            } catch (err) {
+                alert(err.message || err);
+            } finally {
+                resetUI();
+            }
+        });
 
         // Click to upload
         uploadArea.addEventListener('click', (e) => {
             if (e.target.classList.contains('browse-btn')) return;
             fileInput.click();
         });
-        async function downloadFile(url, filename) {
-          const res = await fetch(url);
-          if (!res.ok) throw new Error('Download failed');
-          const blob = await res.blob();
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          URL.revokeObjectURL(a.href);
-          a.remove();
-        }
-
-        function resetUI() {
-          convertBtn.disabled = false;
-          convertBtn.textContent = 'Convert to Excel';
-          loading.classList.remove('show');
-          progressContainer.style.display = 'none';
-          progressBar.style.width = '0%';
-        }
-
-        uploadForm.addEventListener('submit', async (e) => {
-          e.preventDefault();
-          if (!fileInput.files[0]) {
-          alert('Please select a PDF file first.');
-          return;
-        }
-
-    // Show loading state
-    convertBtn.disabled = true;
-    convertBtn.textContent = 'Converting...';
-    loading.classList.add('show');
-    progressContainer.style.display = 'block';
-    progressBar.style.width = '60%';
-
-    try {
-      const fd = new FormData();
-      fd.append('file', fileInput.files[0]);
-
-      // Call Flask JSON API
-      const res = await fetch('/api/convert', { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Conversion failed');
-
-      // Download the Excel, then reset
-      const base = fileInput.files[0].name.replace(/\.pdf$/i, '');
-      await downloadFile(data.download_url, `converted_${base}.xlsx`);
-    } 
-    catch (err) {
-      alert(err.message || err);
-     } 
-    finally {
-      resetUI();
-     }
-   });
-  </script>
+    </script>
 </body>
 </html>

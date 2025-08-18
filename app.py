@@ -24,6 +24,10 @@ ALLOWED_EXTENSIONS = {'pdf'}
 UPLOAD_FOLDER = 'temp_uploads'
 OUTPUT_FOLDER = 'temp_outputs'
 
+# Allow only the two layouts the UI exposes
+ALLOWED_LAYOUTS = {'standard', 'product_sizesheet'}
+DEFAULT_LAYOUT = 'product_sizesheet'  # default to the new product roll-up
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -55,6 +59,18 @@ def extract_data_from_pdf(pdf_path: str):
         logger.error(f"Error extracting data from PDF: {e}")
         raise
 
+def _pick_layout(raw_layout: str | None) -> str:
+    """
+    Validate/normalize the requested layout.
+    We only expose 'standard' and 'product_sizesheet' in the UI.
+    """
+    layout = (raw_layout or '').strip().lower()
+    if layout not in ALLOWED_LAYOUTS:
+        if layout:
+            logger.warning(f"Unsupported layout '{layout}' received; falling back to {DEFAULT_LAYOUT}")
+        return DEFAULT_LAYOUT
+    return layout
+
 # -----------------------------------------------------------------------------
 # Routes
 # -----------------------------------------------------------------------------
@@ -62,8 +78,8 @@ def extract_data_from_pdf(pdf_path: str):
 @app.route('/')
 def index():
     """Main upload page."""
+    # You can pass defaults to the template if you want to pre-select an option
     return render_template('index.html')
-
 
 @app.route('/convert', methods=['POST'])
 def convert_pdf():
@@ -82,6 +98,10 @@ def convert_pdf():
             flash('Please upload a PDF file', 'error')
             return redirect(url_for('index'))
 
+        # Read requested layout from the form (radio/select named 'layout')
+        requested_layout = request.form.get('layout', DEFAULT_LAYOUT)
+        layout = _pick_layout(requested_layout)
+
         filename = secure_filename(file.filename)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         pdf_path = os.path.join(UPLOAD_FOLDER, f"{timestamp}_{filename}")
@@ -90,10 +110,14 @@ def convert_pdf():
 
         meta, df = extract_data_from_pdf(pdf_path)
 
-        excel_filename = f"{timestamp}_converted_{filename.rsplit('.', 1)[0]}.xlsx"
+        # Include the layout in the output filename for clarity
+        base = filename.rsplit('.', 1)[0]
+        excel_filename = f"{timestamp}_converted_{layout}_{base}.xlsx"
         excel_path = os.path.join(OUTPUT_FOLDER, excel_filename)
-        write_to_excel(df, meta, excel_path)
-        logger.info(f"Created Excel file: {excel_path}")
+
+        # Pass the layout through to the writer
+        write_to_excel(df, meta, excel_path, layout=layout)
+        logger.info(f"Created Excel file: {excel_path} (layout={layout})")
 
         # Best-effort cleanup of uploaded PDF
         try:
@@ -104,14 +128,13 @@ def convert_pdf():
         return send_file(
             excel_path,
             as_attachment=True,
-            download_name=f"converted_{filename.rsplit('.', 1)[0]}.xlsx",
+            download_name=excel_filename,
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
     except Exception as e:
         logger.error(f"Error during conversion: {e}")
         flash(f'Error processing file: {e}', 'error')
         return redirect(url_for('index'))
-
 
 @app.route('/api/convert', methods=['POST'])
 def api_convert():
@@ -127,6 +150,10 @@ def api_convert():
         if not allowed_file(file.filename):
             return jsonify({'error': 'Only PDF files are allowed'}), 400
 
+        # layout can be sent as form field or query param
+        requested_layout = request.form.get('layout') or request.args.get('layout') or DEFAULT_LAYOUT
+        layout = _pick_layout(requested_layout)
+
         filename = secure_filename(file.filename)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         pdf_path = os.path.join(UPLOAD_FOLDER, f"{timestamp}_{filename}")
@@ -134,9 +161,11 @@ def api_convert():
 
         meta, df = extract_data_from_pdf(pdf_path)
 
-        excel_filename = f"{timestamp}_converted_{filename.rsplit('.', 1)[0]}.xlsx"
+        base = filename.rsplit('.', 1)[0]
+        excel_filename = f"{timestamp}_converted_{layout}_{base}.xlsx"
         excel_path = os.path.join(OUTPUT_FOLDER, excel_filename)
-        write_to_excel(df, meta, excel_path)
+
+        write_to_excel(df, meta, excel_path, layout=layout)
 
         # Best-effort cleanup
         try:
@@ -147,6 +176,7 @@ def api_convert():
         return jsonify({
             'success': True,
             'message': 'File converted successfully',
+            'layout': layout,
             'metadata': meta,
             'rows_processed': int(df.shape[0]),
             'download_url': f'/download/{excel_filename}'
@@ -154,7 +184,6 @@ def api_convert():
     except Exception as e:
         logger.error(f"API conversion error: {e}")
         return jsonify({'error': str(e)}), 500
-
 
 @app.route('/download/<filename>')
 def download_file(filename):
@@ -174,22 +203,19 @@ def download_file(filename):
         logger.error(f"Download error: {e}")
         return jsonify({'error': 'Error downloading file'}), 500
 
-
 @app.route('/health')
 def health_check():
     """Basic health check endpoint."""
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'version': '1.0.0'
+        'version': '1.1.0'  # bumped due to layout switch feature
     })
-
 
 @app.errorhandler(413)
 def too_large(e):
     flash('File too large. Maximum size is 16MB.', 'error')
     return redirect(url_for('index'))
-
 
 @app.errorhandler(Exception)
 def handle_exception(e):
@@ -197,9 +223,8 @@ def handle_exception(e):
     flash('An unexpected error occurred. Please try again.', 'error')
     return redirect(url_for('index'))
 
-
 # -----------------------------------------------------------------------------
-# Maintenance helper (can be wired to a scheduler/cron separately if desired)
+# Maintenance helper
 # -----------------------------------------------------------------------------
 
 def cleanup_old_files(hours: int = 1):
@@ -215,7 +240,6 @@ def cleanup_old_files(hours: int = 1):
                     logger.info(f"Cleaned up old file: {fpath}")
                 except OSError:
                     logger.warning(f"Could not remove old file: {fpath}")
-
 
 # -----------------------------------------------------------------------------
 # Entrypoint
