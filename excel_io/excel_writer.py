@@ -11,6 +11,7 @@ This version is tailored for PDFs that export rows with headers like:
 It automatically:
   - maps those headers to canonical fields,
   - infers the size from Description or Item SKU suffixes,
+  - preserves the original PDF row order in the SizeSheet,
   - builds a SizeSheet: [DEV # | ITEM | NS DESCRIPTION | size columns | Total]
 """
 
@@ -34,14 +35,14 @@ from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 SIZESHEET_SIZE_ORDER: List[str] = [
     "One size",
     "0-3m", "3-6m", "6-12m", "12-18m", "18-24m",
-    "2T", "3T", "4T", "5", "6", "7", "8", "9", "10"
+    "2T", "3T", "4T", "5", "6", "7", "8", "9", "10",
 ]
 
 # Mapping from canonical internal field names -> final SizeSheet headers.
 BASE_COLS_MAP: Dict[str, str] = {
     "dev_no": "DEV #",               # mapped from "Dev Code"
     "item": "ITEM",                  # mapped from "Item SKU"
-    "ns_description": "NS DESCRIPTION"  # mapped from "Description"
+    "ns_description": "NS DESCRIPTION",  # mapped from "Description"
 }
 
 # Column alias sets used to map whatever headings come from the PDF to
@@ -67,7 +68,7 @@ _DESCRIPTION_SIZE_RE = re.compile(
 )
 
 # SKU suffix → size label map for robust fallback when Description doesn’t contain a size.
-# Examples observed in your PDF (RuffleButts/RuggedButts SKUs):
+# Examples observed in your PDFs (RuffleButts/RuggedButts SKUs):
 SKU_SUFFIX_TO_SIZE: Dict[str, str] = {
     "03M00": "0-3m",
     "0306M": "3-6m",
@@ -94,7 +95,7 @@ def write_to_excel(
     meta: dict,
     output_path: str,
     *,
-    layout: str = "sizesheet",
+    layout: str = "standard",
 ) -> None:
     """
     Write an Excel workbook with a Summary sheet and either:
@@ -109,7 +110,7 @@ def write_to_excel(
     meta : dict
         PO metadata for the Summary sheet (PO number, vendor, dates, etc.).
     output_path : str
-        Filesystem path where the Excel file should be saved.
+        Filesystem path where the .xlsx file should be saved.
     layout : {"standard", "sizesheet"}, default "standard"
         Which secondary sheet to add next to Summary.
     """
@@ -285,11 +286,13 @@ def _to_sizesheet_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     Steps:
       1) map incoming column names to canonical fields,
       2) ensure a 'size_label' exists (infer from Description or Item SKU),
-      3) pivot sizes into columns, add Total,
-      4) rename left columns to match SizeSheet headers.
+      3) **preserve original row order** using a helper column,
+      4) pivot sizes into columns, add Total,
+      5) rename left columns to match SizeSheet headers.
     """
     if df is None or df.empty:
-        return pd.DataFrame(columns=[BASE_COLS_MAP["dev_no"], BASE_COLS_MAP["item"], BASE_COLS_MAP["ns_description"]] + SIZESHEET_SIZE_ORDER + ["Total"])
+        cols = [BASE_COLS_MAP["dev_no"], BASE_COLS_MAP["item"], BASE_COLS_MAP["ns_description"]] + SIZESHEET_SIZE_ORDER + ["Total"]
+        return pd.DataFrame(columns=cols)
 
     # ---- 1) Standardize column names to lowercase for matching ----
     col_lookup = {c.lower().strip(): c for c in df.columns}
@@ -315,13 +318,16 @@ def _to_sizesheet_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(
             f"SizeSheet: required columns not found in input: {', '.join(missing)}. "
-            "Make sure your parser preserves PDF headers or provide aliases in COLUMN_ALIASES."
+            "Make sure your parser preserves PDF headers or extend COLUMN_ALIASES."
         )
 
     # ---- 2) Ensure 'size_label' exists; infer when absent or blank ----
     work = df.copy()
 
-    # Normalize and compute size_label if needed
+    # Preserve original row order before any grouping/pivot (critical)
+    work["__order__"] = range(len(work))
+
+    # Normalize/compute size_label if needed
     if size_col is None or work[size_col].isna().all():
         work["__size_label__"] = work.apply(
             lambda r: _infer_size_from_row(
@@ -344,10 +350,10 @@ def _to_sizesheet_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     # Coerce qty to numeric (defensive)
     work["__qty__"] = pd.to_numeric(work[qty_col], errors="coerce").fillna(0).astype(int)
 
-    # ---- 3) Pivot: sizes -> columns (sum quantities) ----
+    # ---- 3) Pivot: sizes -> columns (sum quantities) while preserving order ----
     pivot = (
         work.pivot_table(
-            index=[dev_col, item_col, desc_col],
+            index=["__order__", dev_col, item_col, desc_col],
             columns=size_col,
             values="__qty__",
             aggfunc="sum",
@@ -356,6 +362,9 @@ def _to_sizesheet_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+
+    # Restore original order and drop the helper
+    pivot = pivot.sort_values("__order__").drop(columns="__order__")
 
     # Determine final ordered size columns: preferred order + any extras found
     present_sizes = [c for c in pivot.columns if c not in (dev_col, item_col, desc_col)]
@@ -369,7 +378,7 @@ def _to_sizesheet_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     # Add row total
     pivot["Total"] = pivot[ordered_sizes].sum(axis=1)
 
-    # ---- 4) Rename ID/descriptor headers for the SizeSheet ----
+    # ---- 5) Rename ID/descriptor headers for the SizeSheet ----
     pivot = pivot.rename(
         columns={
             dev_col: BASE_COLS_MAP["dev_no"],
