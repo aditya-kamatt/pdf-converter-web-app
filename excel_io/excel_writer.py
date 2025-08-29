@@ -193,8 +193,8 @@ def write_to_excel(
 
             #SizeSheet
             prod_df = _to_sizesheet_by_product(df)
-            prod_df.to_excel(writer, sheet_name="ProductSizeSheet", index=False)
-            _format_product_sizesheet(writer.sheets["ProductSizeSheet"], prod_df)
+            prod_df.to_excel(writer, sheet_name="SizeSheet", index=False)
+            _format_product_sizesheet(writer.sheets["SizeSheet"], prod_df)
 
         logging.info("Excel file written successfully: %s", output_path)
     except Exception as e:
