@@ -45,8 +45,12 @@ from openpyxl.utils import get_column_letter
 # Canonical size order (edit to match your program’s exact buckets)
 SIZE_COLUMNS: List[str] = [
     "One size",
+    # Adult sizes
+    "SS", "S", "M", "L", "XL", "XXL",   
+    
     "0-3m", "3-6m", "6-12m", "12-18m", "18-24m",
     "2T", "3T", "4T", "5", "6", "7", "8", "10",
+   
     # pack/combined ranges (if present in your data)
     "0-2T", "2T-4T", "2T-5", "0-6m", "12-24m",
 ]
@@ -54,10 +58,11 @@ SIZE_COLUMNS: List[str] = [
 # Final column titles for descriptive columns per layout
 BASE_COLS_MAP: Dict[str, str] = {
     "po_no": "PO #",
-    "dev_no": "DEV #",
-    "item_style": "ITEM",              # Item SKU with size suffix removed
-    "ns_description": "NS DESCRIPTION",
-    "product": "PRODUCT",              # Description with trailing size removed
+    "dev_no": "Dev Code", 
+    "item_style": "Item SKU",              # Item SKU with size suffix removed
+    "ns_description": "Description",
+    "product": "Product",              # Description with trailing size removed
+    "hts_code": "HTS Code",
 }
 
 # Case-insensitive aliases for incoming headers
@@ -65,6 +70,7 @@ COLUMN_ALIASES: Dict[str, Tuple[str, ...]] = {
     "po_no": ("po number", "po #", "po#", "po", "po_no", "po num"),
     "dev_no": ("dev no", "dev #", "dev#", "dev code", "dev_code", "dev", "devcode"),
     "item": ("item", "item sku", "item_sku", "sku"),
+    "hts_code": ("hts", "hts code", "hts_code", "hs", "hs code", "hs_code", "htscode"),
     "ns_description": ("ns description", "description", "desc", "item description"),
     "qty": ("qty", "quantity", "order qty", "ordered qty"),
     "size_label": ("size_label", "size", "size name"),  # optional
@@ -72,6 +78,14 @@ COLUMN_ALIASES: Dict[str, Tuple[str, ...]] = {
 
 # Tolerant patterns for detecting size tokens in Description
 _CANONICAL_TO_PAT = {
+    # Adult sizes (tolerant to variants)
+    "SS":       r"\b(?:ss|xs|x-?s|extra\s*small|xtra\s*small|ex\s*small)\b",
+    "S":        r"\b(?:s|sm|small)\b",
+    "M":        r"\b(?:m|med|medium)\b",
+    "L":        r"\b(?:l|lg|large)\b",
+    "XL":       r"\b(?:xl|x-?l|extra\s*large|xtra\s*large)\b",
+    "XXL":      r"\b(?:xxl|2xl|xx-?l|double\s*xl|extra\s*extra\s*large)\b",
+
     "One size": r"(?:one\s*size|\bos\b)",
     "0-3m":     r"0\s*-\s*3\s*m",
     "3-6m":     r"3\s*-\s*6\s*m",
@@ -86,6 +100,7 @@ _CANONICAL_TO_PAT = {
     "7":        r"\b7\b",
     "8":        r"\b8\b",
     "10":       r"\b10\b",
+    
     # ranges sometimes seen in headers/desc
     "0-2T":     r"0\s*-\s*2\s*t",
     "2T-4T":    r"2\s*t\s*-\s*4\s*t",
@@ -157,13 +172,13 @@ def write_to_excel(
     meta: dict,
     output_path: str,
     *,
-    layout: str = "product_sizesheet",
+    layout: str = "all",
 ) -> None:
     """
-    Write an Excel workbook with a Summary sheet and one of:
-      - 'Orders' (layout="standard"): flat dump (unchanged)
-      - 'SizeSheet' (layout="sizesheet"): one row per style (previous behavior)
-      - 'ProductSizeSheet' (layout="product_sizesheet"): one row per PRODUCT name (new)
+    Write an Excel workbook with: 
+      - 'Summary' sheet
+      - 'Orders' sheet (flat)
+      - 'SizeSheet' sheet (style-based matrix)
     """
     try:
         # Normalize duplicate headers immediately
@@ -172,18 +187,14 @@ def write_to_excel(
         with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
             _create_summary_sheet(writer, meta)
 
-            lay = (layout or "product_sizesheet").lower()
-            if lay == "standard":
-                df.to_excel(writer, sheet_name="Orders", index=False)
-                _format_orders_sheet(writer.sheets["Orders"], df)
-            elif lay == "sizesheet":
-                size_df = _to_sizesheet_by_style(df)
-                size_df.to_excel(writer, sheet_name="SizeSheet", index=False)
-                _format_sizesheet(writer.sheets["SizeSheet"], size_df)
-            else:
-                prod_df = _to_sizesheet_by_product(df)
-                prod_df.to_excel(writer, sheet_name="ProductSizeSheet", index=False)
-                _format_product_sizesheet(writer.sheets["ProductSizeSheet"], prod_df)
+            #Orders Sheet
+            df.to_excel(writer, sheet_name="Orders", index=False)
+            _format_orders_sheet(writer.sheets["Orders"], df)
+
+            #SizeSheet
+            prod_df = _to_sizesheet_by_product(df)
+            prod_df.to_excel(writer, sheet_name="ProductSizeSheet", index=False)
+            _format_product_sizesheet(writer.sheets["ProductSizeSheet"], prod_df)
 
         logging.info("Excel file written successfully: %s", output_path)
     except Exception as e:
@@ -273,7 +284,7 @@ def _format_orders_sheet(ws, df: pd.DataFrame) -> None:
 
 
 # ==============================================================================
-# NEW: SizeSheet by PRODUCT NAME (one row per product)
+# SizeSheet by PRODUCT NAME (one row per product)
 # ==============================================================================
 
 def _to_sizesheet_by_product(df: pd.DataFrame) -> pd.DataFrame:
@@ -286,6 +297,7 @@ def _to_sizesheet_by_product(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=cols)
 
     po_col, dev_col, item_col, desc_col, qty_col, size_col = _map_alias_columns(df)
+    hts_col = _pick_hts_column(df)
     required = {"Description": desc_col, "Qty": qty_col}
     missing = [k for k, v in required.items() if v is None]
     if missing:
@@ -324,6 +336,15 @@ def _to_sizesheet_by_product(df: pd.DataFrame) -> pd.DataFrame:
     first_seen = work.groupby("__product__", sort=False)["__row__"].min().rename("__first__")
     work = work.merge(first_seen, on="__product__", how="left")
 
+    # Representative (first-seen non-empty) values per PRODUCT
+    work["__item_style__"] = _series_from_label(work, item_col).astype(str).apply(_strip_item_size_suffix) if item_col else ""
+    rep_cols = {
+        "Item SKU": work.groupby("__product__", sort=False)["__item_style__"].apply(_first_nonempty),
+        "Dev Code": work.groupby("__product__", sort=False)[dev_col].apply(_first_nonempty) if dev_col else pd.Series(dtype=str),
+        "HTS Code": work.groupby("__product__", sort=False)[hts_col].apply(_first_nonempty) if hts_col else pd.Series(dtype=str),
+    }
+    rep_df = pd.DataFrame(rep_cols).reset_index().rename(columns={"__product__": "__product__"})
+
     # Pivot: PRODUCT as index, sizes as columns, quantities summed
     pvt = (
         work.pivot_table(
@@ -338,20 +359,21 @@ def _to_sizesheet_by_product(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # Order rows by first-seen appearance
-    pvt = pvt.merge(first_seen.reset_index(), on="__product__", how="left").sort_values("__first__").drop(columns="__first__")
+    pvt = pvt.merge(rep_df, on="__product__", how="left")
 
-    # Enforce our size column order and include any extras at the end
-    present_sizes = [c for c in pvt.columns if c != "__product__"]
+    present_sizes = [c for c in pvt.columns if c not in ("__product__", "Item SKU", "Dev Code", "HTS Code")]
     extras = [s for s in present_sizes if s not in SIZE_COLUMNS]
     ordered_sizes = SIZE_COLUMNS + [s for s in extras if s not in SIZE_COLUMNS]
 
-    # Reindex columns and compute Total
-    pvt = pvt.set_index("__product__").reindex(columns=ordered_sizes, fill_value=0).reset_index()
+    pvt = (
+        pvt.set_index("__product__")
+           .reindex(columns=["Item SKU", "Dev Code", "HTS Code"] + ordered_sizes, fill_value=0)
+           .reset_index()
+    )
     pvt["Total"] = pvt[ordered_sizes].sum(axis=1)
 
-    # Final column order + headers
     pvt = pvt.rename(columns={"__product__": BASE_COLS_MAP["product"]})
-    pvt = pvt[[BASE_COLS_MAP["product"]] + ordered_sizes + ["Total"]]
+    pvt = pvt[["Item SKU", "Dev Code", "HTS Code", BASE_COLS_MAP["product"]] + ordered_sizes + ["Total"]]
 
     return pvt
 
@@ -367,7 +389,7 @@ def _format_product_sizesheet(ws, df: pd.DataFrame) -> None:
 
     for row in ws.iter_rows(min_row=2):
         for idx, cell in enumerate(row, start=1):
-            if idx == 1:  # PRODUCT
+            if idx in (1, 2, 3, 4):  # PRODUCT
                 cell.alignment = Alignment(horizontal="left", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
@@ -381,8 +403,10 @@ def _format_product_sizesheet(ws, df: pd.DataFrame) -> None:
             max_len = max(len(str(col)), s.astype(str).str.len().max())
         else:
             max_len = len(str(col))
-        if col == "PRODUCT":
+        if col in ("PRODUCT",):
             width = min(max_len + 6, 70)
+        elif col in ("Item SKU", "Dev Code", "HTS Code"):
+            width = min(max_len + 4, 40)
         elif col == "Total":
             width = max(10, max_len + 2)
         else:
@@ -459,8 +483,26 @@ def _to_sizesheet_by_style(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     pvt["Total"] = pvt[SIZE_COLUMNS].sum(axis=1)
+    rep_style = work.groupby("__item_style__", sort=False).agg({
+        dev_col: _first_nonempty if dev_col else (lambda s: ""),
+        (hts_col if (hts_col := _pick_hts_column(work)) else "__dummy__"):_first_nonempty
+    }).reset_index()
+
+    #Clean up columns after groupby
+    if dev_col:
+        rep_style = rep_style.rename(columns={dev_col: "Dev Code"})
+    else:
+        rep_style["Dev Code"] = ""
+    if hts_col:
+        rep_style = rep_style.rename(columns={hts_col: "HTS Code"})
+    else:
+        rep_style["HTS Code"] = ""
+
+    rep_style = rep_style[["__item_style__", "Dev Code", "HTS Code"]]
+    pvt = pvt.merge(rep_style, on="__item_style__", how="left")
     pvt = pvt.rename(columns={"__item_style__": BASE_COLS_MAP["item_style"]})
-    pvt = pvt[[BASE_COLS_MAP["item_style"]] + SIZE_COLUMNS + ["Total"]]
+    leading = [BASE_COLS_MAP["item_style"], "Dev Code", "HTS Code"]
+    pvt = pvt[leading + SIZE_COLUMNS + ["Total"]]
     return pvt
 
 
@@ -485,7 +527,7 @@ def _format_sizesheet(ws, df: pd.DataFrame) -> None:
             max_len = max(len(str(col)), s.astype(str).str.len().max())
         else:
             max_len = len(str(col))
-        if col in (BASE_COLS_MAP["item_style"],):
+        if col in (BASE_COLS_MAP["item_style"], "Dev Code","HTS Code"):
             width = min(max_len + 6, 60)
         elif col == "Total":
             width = max(10, max_len + 2)
@@ -562,6 +604,12 @@ def _map_alias_columns(df: pd.DataFrame):
 
     return po_col, dev_col, item_col, desc_col, qty_col, size_col
 
+def _pick_hts_column(df: pd.DataFrame) -> Optional[str]:
+    lookup = {str(c).lower().strip(): c for c in df.columns}
+    for alias in COLUMN_ALIASES.get("hts_code", ()):
+        if alias in lookup:
+            return lookup[alias]
+    return None
 
 def _infer_size_from_text(text: str) -> str:
     """Pick the first matching size token from free text using the description regex."""
@@ -589,7 +637,6 @@ def _infer_size(description: str, item_sku: str) -> str:
             return v
     return "Unknown"
 
-
 def _strip_item_size_suffix(item_sku: str) -> str:
     """Remove a known trailing size code from an Item SKU to get the STYLE code."""
     if not isinstance(item_sku, str):
@@ -609,3 +656,8 @@ def _strip_trailing_size_from_description(desc: str) -> str:
     d = desc.strip().replace("–", "-").replace("—", "-")
     d = _TRAILING_SIZE_RE.sub("", d)
     return d.strip(" -–—").strip()
+def _first_nonempty(s: pd.Series) -> str:
+    for v in s:
+        if pd.notna(v) and str(v).strip() != "":
+            return str(v)
+    return ""
