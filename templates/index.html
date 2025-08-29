@@ -50,11 +50,11 @@
         @keyframes spin { 0%{transform:rotate(0deg);} 100%{transform:rotate(360deg);} }
 
         /* New: layout switcher */
-        .layout-fieldset { margin-top: 10px; text-align: left; background: #f8f9ff; border: 1px solid #e6e8ff; border-radius: 12px; padding: 14px; }
+        /* .layout-fieldset { margin-top: 10px; text-align: left; background: #f8f9ff; border: 1px solid #e6e8ff; border-radius: 12px; padding: 14px; }
         .layout-legend { font-weight: 700; color: #333; font-size: 0.95rem; padding: 0 6px; }
         .layout-option { display:flex; align-items:center; gap:10px; margin:8px 0; color:#444; }
         .layout-option input { transform: translateY(1px); }
-        .layout-hint { color:#666; font-size:.85rem; margin-left:26px; }
+        .layout-hint { color:#666; font-size:.85rem; margin-left:26px; } */
     </style>
 </head>
 <body>
@@ -92,20 +92,21 @@
                 <strong>Size:</strong> <span id="fileSize"></span>
             </div>
 
-            <!-- Output format switcher -->
+            <!-- Output format switcher 
             <fieldset class="layout-fieldset" aria-label="Output format">
                 <legend class="layout-legend">Output format</legend>
                 <label class="layout-option" title="One row per product, quantities in size columns">
                     <input type="radio" name="layout" value="product_sizesheet" checked>
                     <span><strong>Sizesheet</strong></span>
-                </label>
+                </label> -->
                 <!--<div class="layout-hint">Great for summaries: combines same product into a single row.</div>-->
+                
 
-                <label class="layout-option" title="Flat list of every line from the PDF">
+                <!--<label class="layout-option" title="Flat list of every line from the PDF">
                     <input type="radio" name="layout" value="standard">
                     <span><strong>Standard</strong> </span>
                 </label>
-            </fieldset>
+            </fieldset> -->
 
             <div class="loading" id="loading">
                 <div class="spinner"></div>
@@ -183,7 +184,6 @@
             progressContainer.style.display = 'none';
             progressBar.style.width = '0%';
         }
-        const getSelectedLayout = () => (document.querySelector('input[name="layout"]:checked')?.value || 'product_sizesheet');
 
         // Submit
         uploadForm.addEventListener('submit', async (e) => {
@@ -191,9 +191,9 @@
             if (!fileInput.files[0]) { alert('Please select a PDF file first.'); return; }
 
             // Show loading state
-            const selLayout = getSelectedLayout();
+            // const selLayout = getSelectedLayout();
             convertBtn.disabled = true;
-            convertBtn.textContent = `Converting… (${selLayout === 'standard' ? 'Standard' : 'Product SizeSheet'})`;
+            convertBtn.textContent = 'Converting… ';
             loading.classList.add('show');
             progressContainer.style.display = 'block';
             progressBar.style.width = '60%';
@@ -201,7 +201,6 @@
             try {
                 const fd = new FormData();
                 fd.append('file', fileInput.files[0]);
-                fd.append('layout', selLayout); // <-- send layout to backend
 
                 // Call Flask JSON API
                 const res = await fetch('/api/convert', { method: 'POST', body: fd });
@@ -210,8 +209,8 @@
 
                 // Build download name (prefer server-reported layout)
                 const base = fileInput.files[0].name.replace(/\.pdf$/i, '');
-                const layoutUsed = (data.layout || selLayout);
-                await downloadFile(data.download_url, `converted_${layoutUsed}_${base}.xlsx`);
+                // const layoutUsed = (data.layout || selLayout);
+                await downloadFile(data.download_url, `converted_${base}.xlsx`);
             } catch (err) {
                 alert(err.message || err);
             } finally {

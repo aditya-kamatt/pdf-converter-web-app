@@ -24,10 +24,6 @@ ALLOWED_EXTENSIONS = {'pdf'}
 UPLOAD_FOLDER = 'temp_uploads'
 OUTPUT_FOLDER = 'temp_outputs'
 
-# Allow only the two layouts the UI exposes
-ALLOWED_LAYOUTS = {'standard', 'product_sizesheet'}
-DEFAULT_LAYOUT = 'product_sizesheet'  # default to the new product roll-up
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -59,18 +55,6 @@ def extract_data_from_pdf(pdf_path: str):
         logger.error(f"Error extracting data from PDF: {e}")
         raise
 
-def _pick_layout(raw_layout: str | None) -> str:
-    """
-    Validate/normalize the requested layout.
-    We only expose 'standard' and 'product_sizesheet' in the UI.
-    """
-    layout = (raw_layout or '').strip().lower()
-    if layout not in ALLOWED_LAYOUTS:
-        if layout:
-            logger.warning(f"Unsupported layout '{layout}' received; falling back to {DEFAULT_LAYOUT}")
-        return DEFAULT_LAYOUT
-    return layout
-
 # -----------------------------------------------------------------------------
 # Routes
 # -----------------------------------------------------------------------------
@@ -98,10 +82,6 @@ def convert_pdf():
             flash('Please upload a PDF file', 'error')
             return redirect(url_for('index'))
 
-        # Read requested layout from the form (radio/select named 'layout')
-        requested_layout = request.form.get('layout', DEFAULT_LAYOUT)
-        layout = _pick_layout(requested_layout)
-
         filename = secure_filename(file.filename)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         pdf_path = os.path.join(UPLOAD_FOLDER, f"{timestamp}_{filename}")
@@ -112,12 +92,12 @@ def convert_pdf():
 
         # Include the layout in the output filename for clarity
         base = filename.rsplit('.', 1)[0]
-        excel_filename = f"{timestamp}_converted_{layout}_{base}.xlsx"
+        excel_filename = f"{timestamp}_converted_{base}.xlsx"
         excel_path = os.path.join(OUTPUT_FOLDER, excel_filename)
 
         # Pass the layout through to the writer
-        write_to_excel(df, meta, excel_path, layout=layout)
-        logger.info(f"Created Excel file: {excel_path} (layout={layout})")
+        write_to_excel(df, meta, excel_path)
+        logger.info(f"Created Excel file: {excel_path}")
 
         # Best-effort cleanup of uploaded PDF
         try:
@@ -150,10 +130,6 @@ def api_convert():
         if not allowed_file(file.filename):
             return jsonify({'error': 'Only PDF files are allowed'}), 400
 
-        # layout can be sent as form field or query param
-        requested_layout = request.form.get('layout') or request.args.get('layout') or DEFAULT_LAYOUT
-        layout = _pick_layout(requested_layout)
-
         filename = secure_filename(file.filename)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         pdf_path = os.path.join(UPLOAD_FOLDER, f"{timestamp}_{filename}")
@@ -162,10 +138,10 @@ def api_convert():
         meta, df = extract_data_from_pdf(pdf_path)
 
         base = filename.rsplit('.', 1)[0]
-        excel_filename = f"{timestamp}_converted_{layout}_{base}.xlsx"
+        excel_filename = f"{timestamp}_converted_{base}.xlsx"
         excel_path = os.path.join(OUTPUT_FOLDER, excel_filename)
 
-        write_to_excel(df, meta, excel_path, layout=layout)
+        write_to_excel(df, meta, excel_path)
 
         # Best-effort cleanup
         try:
@@ -176,7 +152,6 @@ def api_convert():
         return jsonify({
             'success': True,
             'message': 'File converted successfully',
-            'layout': layout,
             'metadata': meta,
             'rows_processed': int(df.shape[0]),
             'download_url': f'/download/{excel_filename}'
