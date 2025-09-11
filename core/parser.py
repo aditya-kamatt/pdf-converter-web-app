@@ -40,6 +40,7 @@ HEADER = [
 # Public API
 # ==============================
 
+
 def extract_header_meta(pdf_path: str) -> Dict[str, Any]:
     """Extract key metadata from the first/last pages' text."""
     pages = _extract_all_text(pdf_path)
@@ -53,15 +54,24 @@ def extract_header_meta(pdf_path: str) -> Dict[str, Any]:
                 return m.group(1).strip()
         return None
 
-    po_number = _pick([r"PO\s*#?\s*(\d{4,})", r"Purchase\s+Order\s*#?\s*(\d{4,})"], first)
+    po_number = _pick(
+        [r"PO\s*#?\s*(\d{4,})", r"Purchase\s+Order\s*#?\s*(\d{4,})"], first
+    )
     vendor_number = _pick([r"Vendor\s*#\s*(\d+)", r"Vendor\s*No\.?\s*(\d+)"], first)
-    ship_by_date = _pick([r"SHIP\s*(?:COMPLETE\s*)?BY\s*DATE:?\s*([\d/\-]{6,10})",
-                          r"Ship\s*By:?\s*([\d/\-]{6,10})"], first)
+    ship_by_date = _pick(
+        [
+            r"SHIP\s*(?:COMPLETE\s*)?BY\s*DATE:?\s*([\d/\-]{6,10})",
+            r"Ship\s*By:?\s*([\d/\-]{6,10})",
+        ],
+        first,
+    )
     payment_terms = _pick([r"PAYMENT\s*TERMS:?\s*(.+)", r"Terms:?\s*(.+)"], first)
 
     total = None
     for t in reversed(pages):
-        m = re.search(r"Total\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", t, flags=re.I)
+        m = re.search(
+            r"Total\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", t, flags=re.I
+        )
         if m:
             total = m.group(1)
             break
@@ -108,9 +118,11 @@ def extract_table_rows(pdf_path: str) -> List[List[Any]]:
     logger.error("No items extracted from %s", pdf_path)
     return [HEADER]
 
+
 # ==============================
 # Position-based extraction
 # ==============================
+
 
 def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
     import pdfplumber
@@ -188,7 +200,7 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
                     m_upc = re.search(r"\b" + re.escape(upc_s) + r"\b", raw_line)
                     m_price = re.search(money_pat, raw_line)
                     if m_upc and m_price and m_price.start() > m_upc.end():
-                        seg = raw_line[m_upc.end():m_price.start()]
+                        seg = raw_line[m_upc.end() : m_price.start()]
                         seg = re.sub(r"\s{2,}", " ", seg).strip()
                         if seg:
                             branddesc = seg
@@ -228,7 +240,9 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
     return [HEADER] + _dedupe(out_rows)
 
 
-def _find_header_and_columns(words: List[dict]) -> Tuple[float | None, Dict[str, Tuple[float, float]]]:
+def _find_header_and_columns(
+    words: List[dict],
+) -> Tuple[float | None, Dict[str, Tuple[float, float]]]:
     """Identify header band and build x-ranges for columns. Brand/Desc spans from UPC to Rate/Amount."""
     tol = 4.0
     bands: List[Tuple[float, List[dict]]] = []
@@ -249,7 +263,9 @@ def _find_header_and_columns(words: List[dict]) -> Tuple[float | None, Dict[str,
     for y, ws in bands[:14]:  # near top
         text = " ".join(w["text"].lower() for w in ws)
         has_qty = "qty" in text
-        has_sku = ("item" in text and "sku" in text) or "item sku" in text or "sku" in text
+        has_sku = (
+            ("item" in text and "sku" in text) or "item sku" in text or "sku" in text
+        )
         has_upc = "upc" in text
         has_price = ("rate" in text) or ("price" in text) or ("unit price" in text)
         has_amount = ("amount" in text) or ("total" in text) or ("amt" in text)
@@ -296,7 +312,9 @@ def _find_header_and_columns(words: List[dict]) -> Tuple[float | None, Dict[str,
         ranges[name] = (left, right)
 
     # Brand/Desc region: start at UPC (then HTS/dev/sku) and end at Rate/Amount
-    left_anchor = ranges.get("upc") or ranges.get("hts") or ranges.get("dev") or ranges.get("sku")
+    left_anchor = (
+        ranges.get("upc") or ranges.get("hts") or ranges.get("dev") or ranges.get("sku")
+    )
     right_anchor = ranges.get("rate") or ranges.get("amount")
     if left_anchor and right_anchor:
         ranges["branddesc"] = (left_anchor[1], right_anchor[0])
@@ -305,8 +323,8 @@ def _find_header_and_columns(words: List[dict]) -> Tuple[float | None, Dict[str,
 
 
 def _which_col(x: float, col_x: Dict[str, Tuple[float, float]]) -> str | None:
-    for name, (l, r) in col_x.items():
-        if l <= x <= r:
+    for name, (left, right) in col_x.items():
+        if left <= x <= right:
             return name
     return None
 
@@ -315,9 +333,11 @@ def _first_match(s: str, pat: str) -> str:
     m = re.search(pat, s or "")
     return m.group(0) if m else ""
 
+
 # ==============================
 # Table extraction (secondary)
 # ==============================
+
 
 def _extract_via_tables(pdf_path: str) -> List[List[Any]]:
     import pdfplumber
@@ -342,7 +362,11 @@ def _extract_via_tables(pdf_path: str) -> List[List[Any]]:
             except Exception:
                 tables = []
             for t in tables:
-                table_rows = [[_clean_ws(c) for c in row] for row in t if any(_clean_ws(c) for c in row)]
+                table_rows = [
+                    [_clean_ws(c) for c in row]
+                    for row in t
+                    if any(_clean_ws(c) for c in row)
+                ]
                 if not table_rows:
                     continue
 
@@ -356,31 +380,46 @@ def _extract_via_tables(pdf_path: str) -> List[List[Any]]:
                 if header_idx is None:
                     continue
 
-                for r in table_rows[header_idx + 1:]:
+                for r in table_rows[header_idx + 1 :]:
                     qty = _to_int(_safe_pick(r, 0))
                     sku = _safe_pick(r, 1)
                     dev = _safe_pick(r, 2)
-                    upc = _first_match(_safe_pick(r, 3) + " " + _safe_pick(r, 4), r"\b\d{8,14}\b")
-                    hts = _first_match(_safe_pick(r, 4) + " " + _safe_pick(r, 5), r"\b\d{8,12}\b")
-                    branddesc = _clean_ws((_safe_pick(r, 5) + " " + _safe_pick(r, 6)).strip())
+                    upc = _first_match(
+                        _safe_pick(r, 3) + " " + _safe_pick(r, 4), r"\b\d{8,14}\b"
+                    )
+                    hts = _first_match(
+                        _safe_pick(r, 4) + " " + _safe_pick(r, 5), r"\b\d{8,12}\b"
+                    )
+                    branddesc = _clean_ws(
+                        (_safe_pick(r, 5) + " " + _safe_pick(r, 6)).strip()
+                    )
                     brand, desc = _split_brand_desc(branddesc)
                     rate = _to_float(_safe_pick(r, -2))
                     amount = _to_float(_safe_pick(r, -1))
                     if amount is None and (qty is not None) and (rate is not None):
                         amount = round(qty * rate, 2)
 
-                    rows.append([
-                        qty if qty is not None else "",
-                        sku, dev, upc, hts, brand, desc,
-                        rate if rate is not None else "",
-                        amount if amount is not None else "",
-                    ])
+                    rows.append(
+                        [
+                            qty if qty is not None else "",
+                            sku,
+                            dev,
+                            upc,
+                            hts,
+                            brand,
+                            desc,
+                            rate if rate is not None else "",
+                            amount if amount is not None else "",
+                        ]
+                    )
 
     return [HEADER] + _dedupe(rows)
+
 
 # ==============================
 # Regex fallback (permissive)
 # ==============================
+
 
 def _extract_via_regex(pdf_path: str) -> List[List[Any]]:
     text = " ".join(_extract_all_text(pdf_path))
@@ -407,28 +446,34 @@ def _extract_via_regex(pdf_path: str) -> List[List[Any]]:
             amount = round(qty * rate, 2)
 
         brand, desc = _split_brand_desc(d.get("branddesc") or "")
-        rows.append([
-            qty if qty is not None else "",
-            _clean_ws(d.get("sku") or ""),
-            _clean_ws(d.get("dev") or ""),
-            _clean_ws(d.get("upc") or ""),
-            "",  # HTS often not printed on rows
-            brand, desc,
-            rate if rate is not None else "",
-            amount if amount is not None else "",
-        ])
+        rows.append(
+            [
+                qty if qty is not None else "",
+                _clean_ws(d.get("sku") or ""),
+                _clean_ws(d.get("dev") or ""),
+                _clean_ws(d.get("upc") or ""),
+                "",  # HTS often not printed on rows
+                brand,
+                desc,
+                rate if rate is not None else "",
+                amount if amount is not None else "",
+            ]
+        )
 
     return [HEADER] + _dedupe(rows)
+
 
 # ==============================
 # Text & utilities
 # ==============================
+
 
 def _extract_all_text(pdf_path: str) -> List[str]:
     """Prefer pdfplumber; optionally fall back to PyPDF2 if present."""
     pages: List[str] = []
     try:
         import pdfplumber
+
         with pdfplumber.open(pdf_path) as pdf:
             for p in pdf.pages:
                 pages.append(p.extract_text() or "")
@@ -437,6 +482,7 @@ def _extract_all_text(pdf_path: str) -> List[str]:
         logger.warning("pdfplumber text extraction failed: %s", e)
     try:
         from PyPDF2 import PdfReader  # optional
+
         rdr = PdfReader(pdf_path)
         for pg in rdr.pages:
             pages.append(pg.extract_text() or "")
