@@ -444,7 +444,6 @@ def _to_sizesheet_by_product(df: pd.DataFrame) -> pd.DataFrame:
         + ordered_sizes
         + ["Total"]
     ]
-
     return pvt
 
 
@@ -677,7 +676,6 @@ def _dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
     out.columns = new_cols
     return out
 
-
 def _series_from_label(df: pd.DataFrame, label) -> Optional[pd.Series]:
     """
     Return a single Series for a label. If the label is duplicated (df[label] is a DataFrame),
@@ -722,7 +720,6 @@ def _pick_hts_column(df: pd.DataFrame) -> Optional[str]:
         if alias in lookup:
             return lookup[alias]
     return None
-
 
 def _pick_hts_column(df: pd.DataFrame) -> Optional[str]:
     lookup = {str(c).lower().strip(): c for c in df.columns}
@@ -785,7 +782,6 @@ def _first_nonempty(s: pd.Series) -> str:
         if pd.notna(v) and str(v).strip() != "":
             return str(v)
     return ""
-
 
 def _dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
