@@ -207,13 +207,14 @@ def write_to_excel(
         with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
             _create_summary_sheet(writer, meta)
 
+            #Orders Sheet
             df.to_excel(writer, sheet_name="Orders", index=False)
             _format_orders_sheet(writer.sheets["Orders"], df)
 
-            # SizeSheet
+            #SizeSheet
             prod_df = _to_sizesheet_by_product(df)
-            prod_df.to_excel(writer, sheet_name="ProductSizeSheet", index=False)
-            _format_product_sizesheet(writer.sheets["ProductSizeSheet"], prod_df)
+            prod_df.to_excel(writer, sheet_name="SizeSheet", index=False)
+            _format_product_sizesheet(writer.sheets["SizeSheet"], prod_df)
 
         logging.info("Excel file written successfully: %s", output_path)
     except Exception as e:
@@ -381,6 +382,7 @@ def _to_sizesheet_by_product(df: pd.DataFrame) -> pd.DataFrame:
     work = work.merge(first_seen, on="__product__", how="left")
 
     # Representative (first-seen non-empty) values per PRODUCT
+
     work["__item_style__"] = (
         _series_from_label(work, item_col).astype(str).apply(_strip_item_size_suffix)
         if item_col
@@ -401,8 +403,9 @@ def _to_sizesheet_by_product(df: pd.DataFrame) -> pd.DataFrame:
             else pd.Series(dtype=str)
         ),
     }
-    rep_df = (
-        pd.DataFrame(rep_cols)
+    
+    rep_df = pd.DataFrame(rep_cols).reset_index().rename(columns={"__product__": "__product__"})
+
         .reset_index()
         .rename(columns={"__product__": "__product__"})
     )
@@ -443,7 +446,7 @@ def _to_sizesheet_by_product(df: pd.DataFrame) -> pd.DataFrame:
         + ordered_sizes
         + ["Total"]
     ]
-
+  
     return pvt
 
 
@@ -577,9 +580,89 @@ def _to_sizesheet_by_style(df: pd.DataFrame) -> pd.DataFrame:
         1, BASE_COLS_MAP["dev_no"], pvt[BASE_COLS_MAP["item_style"]].map(dev_map)
     )
 
-    pvt["Total"] = pvt[ordered_sizes].sum(axis=1)
+    pvt["Total"] = pvt[SIZE_COLUMNS].sum(axis=1)
+    rep_style = work.groupby("__item_style__", sort=False).agg({
+        dev_col: _first_nonempty if dev_col else (lambda s: ""),
+        (hts_col if (hts_col := _pick_hts_column(work)) else "__dummy__"):_first_nonempty
+    }).reset_index()
+
+    #Clean up columns after groupby
+    if dev_col:
+        rep_style = rep_style.rename(columns={dev_col: "Dev Code"})
+    else:
+        rep_style["Dev Code"] = ""
+    if hts_col:
+        rep_style = rep_style.rename(columns={hts_col: "HTS Code"})
+    else:
+        rep_style["HTS Code"] = ""
+
+    rep_style = rep_style[["__item_style__", "Dev Code", "HTS Code"]]
+    pvt = pvt.merge(rep_style, on="__item_style__", how="left")
+    pvt = pvt.rename(columns={"__item_style__": BASE_COLS_MAP["item_style"]})
+    leading = [BASE_COLS_MAP["item_style"], "Dev Code", "HTS Code"]
+    pvt = pvt[leading + SIZE_COLUMNS + ["Total"]]
     return pvt
 
+
+def _format_sizesheet(ws, df: pd.DataFrame) -> None:
+    header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True, size=11)
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    for row in ws.iter_rows(min_row=2):
+        for idx, cell in enumerate(row, start=1):
+            if idx == 1:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.font = Font(size=10)
+    for col_idx, col in enumerate(df.columns, start=1):
+        letter = get_column_letter(col_idx)
+        s = _series_from_label(df, col) if col in df.columns else None
+        if s is not None and len(df) > 0:
+            max_len = max(len(str(col)), s.astype(str).str.len().max())
+        else:
+            max_len = len(str(col))
+        if col in (BASE_COLS_MAP["item_style"], "Dev Code","HTS Code"):
+            width = min(max_len + 6, 60)
+        elif col == "Total":
+            width = max(10, max_len + 2)
+        else:
+            width = max(6, min(max_len + 1, 10))
+        ws.column_dimensions[letter].width = width
+    ws.freeze_panes = "A2"
+    thin = Border(left=Side(style="thin"), right=Side(style="thin"),
+                  top=Side(style="thin"), bottom=Side(style="thin"))
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.border = thin
+    zebra = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+    for r_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
+        if r_idx % 2 == 0:
+            for cell in row:
+                cell.fill = zebra
+
+
+# ==============================================================================
+# Helpers (robustness, aliasing, parsing)
+# ==============================================================================
+
+def _dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Make incoming headers unique by appending .1, .2, ... to duplicates (first kept as-is)."""
+    out = df.copy()
+    seen, new_cols = {}, []
+    for c in out.columns:
+        k = str(c)
+        if k in seen:
+            seen[k] += 1
+            new_cols.append(f"{k}.{seen[k]}")
+        else:
+            seen[k] = 0
+            new_cols.append(k)
+    out.columns = new_cols
+    return out
 
 def _series_from_label(df: pd.DataFrame, label) -> Optional[pd.Series]:
     """
@@ -618,6 +701,12 @@ def _map_alias_columns(df: pd.DataFrame):
 
     return po_col, dev_col, item_col, desc_col, qty_col, size_col
 
+def _pick_hts_column(df: pd.DataFrame) -> Optional[str]:
+    lookup = {str(c).lower().strip(): c for c in df.columns}
+    for alias in COLUMN_ALIASES.get("hts_code", ()):
+        if alias in lookup:
+            return lookup[alias]
+    return None
 
 def _pick_hts_column(df: pd.DataFrame) -> Optional[str]:
     lookup = {str(c).lower().strip(): c for c in df.columns}
@@ -653,7 +742,6 @@ def _infer_size(description: str, item_sku: str) -> str:
             return v
     return "Unknown"
 
-
 def _strip_item_size_suffix(item_sku: str) -> str:
     """Remove a known trailing size code from an Item SKU to get the STYLE code."""
     if not isinstance(item_sku, str):
@@ -673,14 +761,11 @@ def _strip_trailing_size_from_description(desc: str) -> str:
     d = desc.strip().replace("–", "-").replace("—", "-")
     d = _TRAILING_SIZE_RE.sub("", d)
     return d.strip(" -–—").strip()
-
-
 def _first_nonempty(s: pd.Series) -> str:
     for v in s:
         if pd.notna(v) and str(v).strip() != "":
             return str(v)
     return ""
-
 
 def _dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
