@@ -237,16 +237,17 @@ def write_to_excel(
             # if HTS exists, rows with bad/empty HTS also get reconsidered
             need = need | ~df[hts_col].astype(str).str.fullmatch(r"\d{6,12}|", na=False)
 
-        import re
-        def _split_from_desc(s: str):
-            s = re.sub(r"\s+", " ", str(s) if s is not None else "").strip()
-            if not s:
-                return "", ""
-            head, *tail = s.split(" ", 1)
-            return head, (tail[0] if tail else "")
-
-        pairs = s_desc[need].map(_split_from_desc)
-        if not pairs.empty:
+        # import re
+        # def _split_from_desc(s: str):
+        #     s = re.sub(r"\s+", " ", str(s) if s is not None else "").strip()
+        #     if not s:
+        #         return "", ""
+        #     head, *tail = s.split(" ", 1)
+        #     return head, (tail[0] if tail else "")
+        #
+        # pairs = s_desc[need].map(_split_from_desc)
+        pairs = s_desc[need].map(_split_brand_desc_heuristic)
+         if not pairs.empty:
             df.loc[pairs.index, brand_col] = [p[0] for p in pairs]
             df.loc[pairs.index, desc_col]  = [p[1] for p in pairs]
 
@@ -908,7 +909,8 @@ def _split_brand_desc_heuristic(s: str) -> Tuple[str, str]:
     brand = []
     for tok in toks:
         if re.match(r"^[A-Z][A-Za-z0-9'&\-]*$", tok) or re.match(r"^[A-Z0-9&]+$", tok):
-            brand.append(tok); continue
+            brand.append(tok)
+            continue
         break
     if brand:
         j = len(" ".join(brand))

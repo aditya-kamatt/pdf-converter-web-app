@@ -180,9 +180,9 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
 
     out_rows: List[List[Any]] = []
     _HTS_NUM_RE = re.compile(r"^\d{6,12}$")
-    money_pat = r"(?:USD\s*)?\$?\d{1,3}(?:,\d{3})*\.\d{2}"
-    _MONEY_RE = re.compile(money_pat)
-
+    #    money_pat = r"(?:USD\s*)?\$?\d{1,3}(?:,\d{3})*\.\d{2}"
+    #    _MONEY_RE = re.compile(money_pat)
+    # Use module-level _MONEY_RE defined once
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             words = page.extract_words(keep_blank_chars=False, use_text_flow=True)
@@ -215,6 +215,7 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
             for _, arr in bands:
                 arr.sort(key=lambda d: d["x0"])
                 cells = {k: [] for k in col_x.keys()}
+                cells.setdefault("branddesc", []) # Always allow spillover into brand/description even if header anchoring missed it.
                 for w in arr:
                     cx = (w["x0"] + w["x1"]) / 2.0
                     col = _which_col(cx, col_x)
@@ -225,8 +226,10 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
                 elif col in ("rate", "amount") and not _MONEY_RE.fullmatch(tok):
                     col = "branddesc"
 
-                if col:
+                if col an col in cells:
                     cells[col].append(tok)
+                elif col:
+                    cells["branddesc"].append(tok)
 
                 qty_s = " ".join(cells.get("qty", []))
                 sku_s = "".join(cells.get("sku", []))
@@ -282,12 +285,12 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
                     amount = round(qty * rate, 2)
 
                 # Split brand/desc
-                brand, desc = "", branddesc
-                if branddesc:
-                    parts = branddesc.split(" ", 1)
-                    brand = parts[0]
-                    desc = parts[1] if len(parts) > 1 else ""
-
+                # brand, desc = "", branddesc
+                # if branddesc:
+                    #    parts = branddesc.split(" ", 1)
+                    #    brand = parts[0]
+                    #    desc = parts[1] if len(parts) > 1 else ""
+                brand, desc = _split_brand_desc(branddesc)
                 row = [
                     qty if qty is not None else "",
                     sku_s,
@@ -399,7 +402,8 @@ def _find_header_and_columns(
         left_edge = left_anchor[1]
         if "hts" in ranges:
             left_edge = max(left_edge, ranges["hts"][1])
-        ranges["branddesc"] = (left_edge, right_anchor[0])
+        if left_edge + 8.0 < right_anchor[0]:
+            ranges["branddesc"] = (left_edge, right_anchor[0])
 
     return y, ranges
 
@@ -729,7 +733,7 @@ def _safe_pick(row: List[str], idx: int) -> str:
 
     try:
         return _clean_ws(row[idx])
-    except Exception:
+    except (IndexError, TypeError):
         return ""
 
 
@@ -763,4 +767,4 @@ def _is_reasonable(rows: List[List[Any]]) -> bool:
         otherwise False.
     """
 
-    return isinstance(rows, list) and len(rows) >= 5
+    return isinstance(rows, list) and len(rows) >= 2
