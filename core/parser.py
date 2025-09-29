@@ -226,7 +226,7 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
                 elif col in ("rate", "amount") and not _MONEY_RE.fullmatch(tok):
                     col = "branddesc"
 
-                if col an col in cells:
+                if col and col in cells:
                     cells[col].append(tok)
                 elif col:
                     cells["branddesc"].append(tok)
