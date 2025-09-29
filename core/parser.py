@@ -1,19 +1,19 @@
 """
-parser.py — Robust PDF parser for purchase orders (hotfix).
+parser.py
 
-Fixes for edge-case layouts:
-- Brand/Description window starts at UPC (not HTS) to handle rows where HTS is blank.
-- Per-line fallback: if Brand/Description or Rate/Amount are empty after position bucketing,
-  recover them from the raw line text (substring between the UPC and the first price; last two
-  price-like tokens as Rate and Amount).
-- Accepts headers like "Unit Price" in addition to "Rate".
+This module extracts PO header metadata and line items from vendor PDFs using a
+tiered strategy:
+
+1) Position-based extraction (preferred): buckets words by column geometry.
+2) Table extraction (secondary): uses pdfplumber's table detection.
+3) Regex fallback (last resort): permissive text pattern matching.
 
 Public API:
     extract_header_meta(pdf_path: str) -> dict
-    extract_table_rows(pdf_path: str) -> List[List[Any]]  # includes header row
+    extract_table_rows(pdf_path: str) -> list[list[Any]]
 
 Dependencies:
-    pdfplumber (primary). PyPDF2 is optional (fallback only).
+    pdfplumber (primary). PyPDF2 is optional (text fallback only).
 """
 
 from __future__ import annotations
@@ -42,7 +42,25 @@ HEADER = [
 
 
 def extract_header_meta(pdf_path: str) -> Dict[str, Any]:
-    """Extract key metadata from the first/last pages' text."""
+    """
+    Extract high-level PO metadata from the PDF.
+
+    Parses the first page (and scans the last pages for totals) to recover
+    fields commonly printed in vendor POs.
+
+    Args:
+        pdf_path: Path to the PDF file.
+
+    Returns:
+        A dictionary with keys:
+            - "po_number": Purchase order number (str or "N/A").
+            - "vendor_number": Vendor identifier (str or "N/A").
+            - "ship_by_date": Ship-by date as printed (str or "N/A").
+            - "payment_terms": Payment terms (str or "N/A").
+            - "total": Document total amount (str or "N/A").
+            - "page_count": Number of pages (int).
+    """
+
     pages = _extract_all_text(pdf_path)
     page_count = len(pages)
     first = pages[0] if pages else ""
@@ -87,7 +105,21 @@ def extract_header_meta(pdf_path: str) -> Dict[str, Any]:
 
 
 def extract_table_rows(pdf_path: str) -> List[List[Any]]:
-    """Return [HEADER] + data rows. Tries positions → tables → regex."""
+    """
+    Extract line items as a list of rows, prefixed by HEADER.
+
+    Tries position-based extraction first, then table extraction, and finally
+    a permissive regex fallback. Each successful extractor must satisfy a basic
+    sanity check on the number of rows.
+
+    Args:
+        pdf_path: Path to the PDF file.
+
+    Returns:
+        A list of rows where the first row is HEADER and subsequent rows contain:
+        [Qty, Item_SKU, Dev_Code, UPC, HTS_Code, Brand, Description, Rate, Amount].
+    """
+
     # 1) Position-based
     try:
         rows = _extract_via_positions(pdf_path)
@@ -125,10 +157,31 @@ def extract_table_rows(pdf_path: str) -> List[List[Any]]:
 
 
 def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
+    """
+    Position-based extractor using word geometry.
+
+    Groups words into horizontal bands (lines), assigns tokens to columns by
+    comparing word midpoints to header-derived x-ranges, and repairs common
+    mis-bucketings (e.g., non-numeric HTS -> Brand/Description; stray text under
+    price columns). Performs per-line recovery for missing prices and text.
+
+    Args:
+        pdf_path: Path to the PDF file.
+
+    Returns:
+        HEADER + parsed rows as lists in the canonical column order.
+
+    Raises:
+        Exception: Propagates unexpected pdfplumber errors to the caller
+        (handled by the outer try/except in extract_table_rows).
+    """
+
     import pdfplumber
 
     out_rows: List[List[Any]] = []
+    _HTS_NUM_RE = re.compile(r"^\d{6,12}$")
     money_pat = r"(?:USD\s*)?\$?\d{1,3}(?:,\d{3})*\.\d{2}"
+    _MONEY_RE = re.compile(money_pat)
 
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
@@ -165,8 +218,15 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
                 for w in arr:
                     cx = (w["x0"] + w["x1"]) / 2.0
                     col = _which_col(cx, col_x)
-                    if col:
-                        cells[col].append(w["text"])
+                    tok = w["text"]
+
+                if col == "hts" and not _HTS_NUM_RE.fullmatch(tok):
+                    col = "branddesc"
+                elif col in ("rate", "amount") and not _MONEY_RE.fullmatch(tok):
+                    col = "branddesc"
+
+                if col:
+                    cells[col].append(tok)
 
                 qty_s = " ".join(cells.get("qty", []))
                 sku_s = "".join(cells.get("sku", []))
@@ -174,6 +234,11 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
                 upc_s = _first_match("".join(cells.get("upc", [])), r"\b\d{8,14}\b")
                 hts_s = _first_match("".join(cells.get("hts", [])), r"\b\d{8,12}\b")
                 branddesc = _clean_ws(" ".join(cells.get("branddesc", [])))
+
+                if not hts_s:
+                    spill = [t for t in cells.get("hts", []) if not _HTS_NUM_RE.fullmatch(t)]
+                    if spill:
+                        branddesc = _clean_ws((branddesc + " " + " ".join(spill)).strip())
                 rate_s = "".join(cells.get("rate", []))
                 amount_s = "".join(cells.get("amount", []))
 
@@ -243,7 +308,23 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
 def _find_header_and_columns(
     words: List[dict],
 ) -> Tuple[float | None, Dict[str, Tuple[float, float]]]:
-    """Identify header band and build x-ranges for columns. Brand/Desc spans from UPC to Rate/Amount."""
+    """
+    Locate the header band and compute x-ranges for each column.
+
+    Identifies a plausible header line from the top of the page and computes
+    column ranges by midpoint ordering. The Brand/Description window is defined
+    from the right edge of UPC/HTS/Dev/SKU through the left edge of
+    Rate/Unit Price/Amount.
+
+    Args:
+        words: pdfplumber word dictionaries for a page.
+
+    Returns:
+        A tuple of:
+          - header_y: The vertical centerline of the header row (or None).
+          - col_x: Mapping of column name -> (left_x, right_x) interval.
+    """
+
     tol = 4.0
     bands: List[Tuple[float, List[dict]]] = []
     for w in words:
@@ -260,7 +341,7 @@ def _find_header_and_columns(
     bands.sort(key=lambda t: t[0])
 
     header = None
-    for y, ws in bands[:14]:  # near top
+    for y, ws in bands[:14]:
         text = " ".join(w["text"].lower() for w in ws)
         has_qty = "qty" in text
         has_sku = (
@@ -312,17 +393,29 @@ def _find_header_and_columns(
         ranges[name] = (left, right)
 
     # Brand/Desc region: start at UPC (then HTS/dev/sku) and end at Rate/Amount
-    left_anchor = (
-        ranges.get("upc") or ranges.get("hts") or ranges.get("dev") or ranges.get("sku")
-    )
+    left_anchor = (ranges.get("upc") or ranges.get("hts") or ranges.get("dev") or ranges.get("sku"))
     right_anchor = ranges.get("rate") or ranges.get("amount")
     if left_anchor and right_anchor:
-        ranges["branddesc"] = (left_anchor[1], right_anchor[0])
+        left_edge = left_anchor[1]
+        if "hts" in ranges:
+            left_edge = max(left_edge, ranges["hts"][1])
+        ranges["branddesc"] = (left_edge, right_anchor[0])
 
     return y, ranges
 
 
 def _which_col(x: float, col_x: Dict[str, Tuple[float, float]]) -> str | None:
+    """
+    Return the column name whose x-range contains the given x-coordinate.
+
+    Args:
+        x: Word midpoint x-coordinate.
+        col_x: Mapping of column name -> (left_x, right_x).
+
+    Returns:
+        The column key if x lies within a range; otherwise None.
+    """
+
     for name, (left, right) in col_x.items():
         if left <= x <= right:
             return name
@@ -330,16 +423,41 @@ def _which_col(x: float, col_x: Dict[str, Tuple[float, float]]) -> str | None:
 
 
 def _first_match(s: str, pat: str) -> str:
+    """
+    Return the first regex match for ``pat`` in ``s``, or an empty string.
+
+    Args:
+        s: Input string to search.
+        pat: Regex pattern string.
+
+    Returns:
+        The first matching substring, or "" if not found.
+    """
+
     m = re.search(pat, s or "")
     return m.group(0) if m else ""
 
 
 # ==============================
-# Table extraction (secondary)
+# Table extraction
 # ==============================
 
 
 def _extract_via_tables(pdf_path: str) -> List[List[Any]]:
+    """
+    Secondary extractor using pdfplumber's table detection.
+
+    Applies line-based table heuristics to locate a header and subsequent rows.
+    Performs light normalization and value coercion, and reuses the same row
+    schema as the position-based extractor.
+
+    Args:
+        pdf_path: Path to the PDF file.
+
+    Returns:
+        HEADER + parsed rows, or HEADER only if no plausible table is found.
+    """
+    
     import pdfplumber
 
     settings = {
@@ -417,14 +535,29 @@ def _extract_via_tables(pdf_path: str) -> List[List[Any]]:
 
 
 # ==============================
-# Regex fallback (permissive)
+# Regex fallback
 # ==============================
 
 
 def _extract_via_regex(pdf_path: str) -> List[List[Any]]:
+    """
+    Permissive regex fallback over concatenated page text.
+
+    Useful when geometry/table methods fail. Attempts to parse minimally viable
+    item lines containing qty, sku, upc, brand/desc, and price fields.
+
+    Args:
+        pdf_path: Path to the PDF file.
+
+    Returns:
+        HEADER + parsed rows with HTS_Code typically blank (row-level HTS is
+        often not printed and cannot be recovered reliably by regex alone).
+    """
+
     text = " ".join(_extract_all_text(pdf_path))
     text = re.sub(r"\s+", " ", text)
     money_pat = r"(?:USD\s*)?\$?\d{1,3}(?:,\d{3})*\.\d{2}"
+    _MONEY_RE = re.compile(money_pat)
 
     pat = re.compile(
         r"(?P<qty>\d{1,4})\s+"
@@ -452,7 +585,7 @@ def _extract_via_regex(pdf_path: str) -> List[List[Any]]:
                 _clean_ws(d.get("sku") or ""),
                 _clean_ws(d.get("dev") or ""),
                 _clean_ws(d.get("upc") or ""),
-                "",  # HTS often not printed on rows
+                "",
                 brand,
                 desc,
                 rate if rate is not None else "",
@@ -469,7 +602,18 @@ def _extract_via_regex(pdf_path: str) -> List[List[Any]]:
 
 
 def _extract_all_text(pdf_path: str) -> List[str]:
-    """Prefer pdfplumber; optionally fall back to PyPDF2 if present."""
+    """
+    Extract page texts from the PDF.
+
+    Prefers pdfplumber; if it fails, falls back to PyPDF2 when available.
+
+    Args:
+        pdf_path: Path to the PDF file.
+
+    Returns:
+        A list of raw page strings (one per page). Missing/failed pages return "".
+    """
+
     pages: List[str] = []
     try:
         import pdfplumber
@@ -492,10 +636,32 @@ def _extract_all_text(pdf_path: str) -> List[str]:
 
 
 def _clean_ws(s: str | None) -> str:
+    """
+    Normalize whitespace: strip ends and collapse internal runs to single spaces.
+
+    Args:
+        s: Input string or None.
+
+    Returns:
+        Cleaned string ("" if input is None).
+    """
+    
     return re.sub(r"\s+", " ", (s or "").strip())
 
 
 def _to_float(s: str | None) -> float | None:
+    """
+    Parse a currency-like string to float.
+
+    Removes "$", commas, and optional leading "USD". Returns None on failure.
+
+    Args:
+        s: String containing a monetary value.
+
+    Returns:
+        Parsed float value, or None if parsing fails.
+    """
+
     if not s:
         return None
     try:
@@ -508,6 +674,16 @@ def _to_float(s: str | None) -> float | None:
 
 
 def _to_int(s: str | None) -> int | None:
+    """
+    Parse an integer from a string, keeping only digits and a leading minus.
+
+    Args:
+        s: String containing an integer-like token.
+
+    Returns:
+        Parsed integer, or None if parsing fails or the token is empty.
+    """
+
     if not s:
         return None
     try:
@@ -518,6 +694,16 @@ def _to_int(s: str | None) -> int | None:
 
 
 def _dedupe(rows: List[List[Any]]) -> List[List[Any]]:
+    """
+    Remove duplicate item rows by (SKU, UPC) key.
+
+    Args:
+        rows: Parsed item rows (without HEADER).
+
+    Returns:
+        A new list of rows with duplicates removed, preserving order.
+    """
+
     seen = set()
     out = []
     for r in rows:
@@ -530,6 +716,17 @@ def _dedupe(rows: List[List[Any]]) -> List[List[Any]]:
 
 
 def _safe_pick(row: List[str], idx: int) -> str:
+    """
+    Safely pick and clean a cell from a row by index.
+
+    Args:
+        row: Row list.
+        idx: Index to fetch.
+
+    Returns:
+        Cleaned cell text, or "" if out-of-range or on error.
+    """
+
     try:
         return _clean_ws(row[idx])
     except Exception:
@@ -537,6 +734,16 @@ def _safe_pick(row: List[str], idx: int) -> str:
 
 
 def _split_brand_desc(s: str) -> Tuple[str, str]:
+    """
+    Split a combined Brand/Description string at the first space.
+
+    Args:
+        s: Input string containing brand and description.
+
+    Returns:
+        A (brand, description) tuple. If no space is present, description is "".
+    """
+
     s = _clean_ws(s)
     if not s:
         return "", ""
@@ -545,4 +752,15 @@ def _split_brand_desc(s: str) -> Tuple[str, str]:
 
 
 def _is_reasonable(rows: List[List[Any]]) -> bool:
+    """
+    Light sanity check for extracted rows.
+
+    Args:
+        rows: Candidate output from an extractor.
+
+    Returns:
+        True if the structure is a list with a minimum expected number of rows;
+        otherwise False.
+    """
+
     return isinstance(rows, list) and len(rows) >= 5
