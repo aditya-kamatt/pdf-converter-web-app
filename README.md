@@ -53,6 +53,7 @@ Follow these steps to set up the project locally.
 git clone https://github.com/aditya-kamatt/pdf-converter-web-app.git
 cd pdf-converter-web-app
 ```
+
 #### 2. Create and activate virtual environment
 ```bash
 python -m venv .venv
@@ -68,11 +69,14 @@ pip install -r requirements.txt
 ```
 #### 4. Run the app
 ```bash
+
 flask --app app.py run
 
 flask run
 ```
 By default, the app runs at: [http://127.0.0.1:5000](http://127.0.0.1:5000)
+```
+By default, the app runs
 #### 5. (Optional) Development Mode
 Enable auto-reload and debug mode:
 ```bash

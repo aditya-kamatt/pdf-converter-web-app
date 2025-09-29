@@ -656,6 +656,7 @@ def _to_sizesheet_by_style(df: pd.DataFrame) -> pd.DataFrame:
     pvt["Total"] = pvt[SIZE_COLUMNS].sum(axis=1)
     rep_style = (
         work.groupby("__item_style__", sort=False)
+      
         .agg({
             (dev_col if dev_col else "__dummy_dev__"): _first_nonempty,
             ((_pick_hts_column(work)) if (_pick_hts_column(work)) else "__dummy_hts__"): _first_nonempty,
@@ -691,7 +692,6 @@ def _format_sizesheet(ws, df: pd.DataFrame) -> None:
     """
     Style the legacy SizeSheet (headers, alignment, borders, zebra striping) and auto-size columns.
     """
-
     header_fill = PatternFill(
         start_color="4F81BD", end_color="4F81BD", fill_type="solid"
     )
