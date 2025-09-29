@@ -247,7 +247,7 @@ def write_to_excel(
         #
         # pairs = s_desc[need].map(_split_from_desc)
         pairs = s_desc[need].map(_split_brand_desc_heuristic)
-         if not pairs.empty:
+        if not pairs.empty:
             df.loc[pairs.index, brand_col] = [p[0] for p in pairs]
             df.loc[pairs.index, desc_col]  = [p[1] for p in pairs]
 
