@@ -24,6 +24,10 @@ from typing import List, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+# Module-level regex patterns for money/price matching
+money_pat = r"(?:USD\s*)?\$?\d{1,3}(?:,\d{3})*\.\d{2}"
+_MONEY_RE = re.compile(money_pat)
+
 HEADER = [
     "Qty",
     "Item_SKU",
@@ -180,9 +184,7 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
 
     out_rows: List[List[Any]] = []
     _HTS_NUM_RE = re.compile(r"^\d{6,12}$")
-    #    money_pat = r"(?:USD\s*)?\$?\d{1,3}(?:,\d{3})*\.\d{2}"
-    #    _MONEY_RE = re.compile(money_pat)
-    # Use module-level _MONEY_RE defined once
+    
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             words = page.extract_words(keep_blank_chars=False, use_text_flow=True)
@@ -215,33 +217,65 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
             for _, arr in bands:
                 arr.sort(key=lambda d: d["x0"])
                 cells = {k: [] for k in col_x.keys()}
-                cells.setdefault("branddesc", []) # Always allow spillover into brand/description even if header anchoring missed it.
+                # Allow spillover for text columns
+                cells.setdefault("branddesc", [])
+                cells.setdefault("brand", [])
+                cells.setdefault("desc", [])
+                
                 for w in arr:
                     cx = (w["x0"] + w["x1"]) / 2.0
                     col = _which_col(cx, col_x)
                     tok = w["text"]
 
-                if col == "hts" and not _HTS_NUM_RE.fullmatch(tok):
-                    col = "branddesc"
-                elif col in ("rate", "amount") and not _MONEY_RE.fullmatch(tok):
-                    col = "branddesc"
+                    # Redirect misplaced tokens
+                    if col == "hts" and not _HTS_NUM_RE.fullmatch(tok):
+                        # If separate brand/desc columns exist, prefer them; otherwise use branddesc
+                        if "brand" in col_x or "desc" in col_x:
+                            col = "brand" if "brand" in col_x else "desc"
+                        else:
+                            col = "branddesc"
+                    elif col in ("rate", "amount") and not _MONEY_RE.fullmatch(tok):
+                        if "desc" in col_x:
+                            col = "desc"
+                        elif "brand" in col_x:
+                            col = "brand"
+                        else:
+                            col = "branddesc"
 
-                if col and col in cells:
-                    cells[col].append(tok)
-                elif col:
-                    cells["branddesc"].append(tok)
+                    if col and col in cells:
+                        cells[col].append(tok)
 
                 qty_s = " ".join(cells.get("qty", []))
                 sku_s = "".join(cells.get("sku", []))
                 dev_s = "".join(cells.get("dev", []))
-                upc_s = _first_match("".join(cells.get("upc", [])), r"\b\d{8,14}\b")
-                hts_s = _first_match("".join(cells.get("hts", [])), r"\b\d{8,12}\b")
-                branddesc = _clean_ws(" ".join(cells.get("branddesc", [])))
-
-                if not hts_s:
-                    spill = [t for t in cells.get("hts", []) if not _HTS_NUM_RE.fullmatch(t)]
-                    if spill:
-                        branddesc = _clean_ws((branddesc + " " + " ".join(spill)).strip())
+                
+                # Use space-join for UPC/HTS to create word boundaries for regex matching
+                upc_raw = " ".join(cells.get("upc", []))
+                upc_s = _first_match(upc_raw, r"\b\d{8,14}\b")
+                
+                # If no dev column detected, extract non-UPC tokens from UPC column as Dev Code
+                if not dev_s and "dev" not in col_x and upc_raw:
+                    # Remove the UPC number, remaining text is likely Dev Code
+                    dev_candidate = upc_raw.replace(upc_s, "").strip()
+                    if dev_candidate and not re.fullmatch(r"\d+", dev_candidate):
+                        dev_s = dev_candidate
+                
+                hts_s = _first_match(" ".join(cells.get("hts", [])), r"\b\d{8,12}\b")
+                
+                # Handle brand/desc: use separate columns if detected, otherwise use combined
+                if "brand" in col_x or "desc" in col_x:
+                    brand_s = _clean_ws(" ".join(cells.get("brand", [])))
+                    desc_s = _clean_ws(" ".join(cells.get("desc", [])))
+                else:
+                    branddesc = _clean_ws(" ".join(cells.get("branddesc", [])))
+                    # Collect HTS spillover if needed
+                    if not hts_s:
+                        spill = [t for t in cells.get("hts", []) if not _HTS_NUM_RE.fullmatch(t)]
+                        if spill:
+                            branddesc = _clean_ws((branddesc + " " + " ".join(spill)).strip())
+                    brand_s = branddesc
+                    desc_s = ""
+                    
                 rate_s = "".join(cells.get("rate", []))
                 amount_s = "".join(cells.get("amount", []))
 
@@ -263,18 +297,35 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
                     elif len(prices) == 1 and amount is None:
                         amount = _to_float(prices[-1])
 
-                # ---- Fallback 2: brand/desc between UPC and first price on the raw line ----
-                if not branddesc and upc_s and prices:
-                    m_upc = re.search(r"\b" + re.escape(upc_s) + r"\b", raw_line)
-                    m_price = re.search(money_pat, raw_line)
-                    if m_upc and m_price and m_price.start() > m_upc.end():
-                        seg = raw_line[m_upc.end() : m_price.start()]
-                        seg = re.sub(r"\s{2,}", " ", seg).strip()
-                        if seg:
-                            branddesc = seg
+                # ---- Fallback 2: extract text between UPC and first price if brand/desc empty ----
+                if "brand" in col_x or "desc" in col_x:
+                    # Using separate columns - extract from raw line if needed
+                    if (not brand_s and not desc_s) and upc_s and prices:
+                        m_upc = re.search(r"\b" + re.escape(upc_s) + r"\b", raw_line)
+                        m_price = re.search(money_pat, raw_line)
+                        if m_upc and m_price and m_price.start() > m_upc.end():
+                            seg = raw_line[m_upc.end() : m_price.start()]
+                            seg = re.sub(r"\s{2,}", " ", seg).strip()
+                            if seg:
+                                # Try to split into brand and desc
+                                parts = seg.split(" ", 1)
+                                brand_s = parts[0]
+                                desc_s = parts[1] if len(parts) > 1 else ""
+                else:
+                    # Using combined branddesc - extract from raw line if needed
+                    if not brand_s and upc_s and prices:
+                        m_upc = re.search(r"\b" + re.escape(upc_s) + r"\b", raw_line)
+                        m_price = re.search(money_pat, raw_line)
+                        if m_upc and m_price and m_price.start() > m_upc.end():
+                            seg = raw_line[m_upc.end() : m_price.start()]
+                            seg = re.sub(r"\s{2,}", " ", seg).strip()
+                            if seg:
+                                brand_s = seg
 
-                if not has_key and pending is not None and branddesc:
-                    pending[6] = _clean_ws((pending[6] or "") + " " + branddesc)
+                # Handle continuation lines (lines without SKU/UPC but with text)
+                if not has_key and pending is not None and (brand_s or desc_s):
+                    # Append to previous row's description
+                    pending[6] = _clean_ws((pending[6] or "") + " " + brand_s + " " + desc_s)
                     continue
 
                 if not has_key:
@@ -284,13 +335,13 @@ def _extract_via_positions(pdf_path: str) -> List[List[Any]]:
                 if amount is None and (qty is not None) and (rate is not None):
                     amount = round(qty * rate, 2)
 
-                # Split brand/desc
-                # brand, desc = "", branddesc
-                # if branddesc:
-                    #    parts = branddesc.split(" ", 1)
-                    #    brand = parts[0]
-                    #    desc = parts[1] if len(parts) > 1 else ""
-                brand, desc = _split_brand_desc(branddesc)
+                # Handle brand/desc: split if using combined field
+                if "brand" in col_x or "desc" in col_x:
+                    brand = brand_s
+                    desc = desc_s
+                else:
+                    brand, desc = _split_brand_desc(brand_s)
+                    
                 row = [
                     qty if qty is not None else "",
                     sku_s,
@@ -378,6 +429,10 @@ def _find_header_and_columns(
             centers.setdefault("upc", []).append(midx(w))
         if "hts" in t:
             centers.setdefault("hts", []).append(midx(w))
+        if "brand" in t:
+            centers.setdefault("brand", []).append(midx(w))
+        if "desc" in t:
+            centers.setdefault("desc", []).append(midx(w))
         if "rate" in t or "price" in t or "unit price" in t:
             centers.setdefault("rate", []).append(midx(w))
         if "amount" in t or "total" in t or "amt" in t:
@@ -395,15 +450,32 @@ def _find_header_and_columns(
         right = (ordered[i + 1][1] + cx) / 2.0 if i + 1 < len(ordered) else cx + 70
         ranges[name] = (left, right)
 
-    # Brand/Desc region: start at UPC (then HTS/dev/sku) and end at Rate/Amount
-    left_anchor = (ranges.get("upc") or ranges.get("hts") or ranges.get("dev") or ranges.get("sku"))
-    right_anchor = ranges.get("rate") or ranges.get("amount")
-    if left_anchor and right_anchor:
-        left_edge = left_anchor[1]
-        if "hts" in ranges:
-            left_edge = max(left_edge, ranges["hts"][1])
-        if left_edge + 8.0 < right_anchor[0]:
-            ranges["branddesc"] = (left_edge, right_anchor[0])
+    # Extend Description column boundary if it's followed by Rate/Amount
+    # Text columns need more space than the simple midpoint calculation provides
+    if "desc" in ranges:
+        desc_idx = next(i for i, (n, _) in enumerate(ordered) if n == "desc")
+        # Find the next numeric column (rate or amount)
+        if desc_idx + 1 < len(ordered):
+            next_name, next_cx = ordered[desc_idx + 1]
+            if next_name in ("rate", "amount"):
+                # Extend desc right boundary to 85% of the gap (instead of 50%)
+                desc_cx = ordered[desc_idx][1]
+                gap = next_cx - desc_cx
+                extended_right = desc_cx + (gap * 0.85)
+                ranges["desc"] = (ranges["desc"][0], extended_right)
+                # Adjust the next column's left boundary
+                ranges[next_name] = (extended_right, ranges[next_name][1])
+
+    # Brand/Desc region: only create combined region if individual columns not detected
+    if "brand" not in ranges and "desc" not in ranges:
+        left_anchor = (ranges.get("upc") or ranges.get("hts") or ranges.get("dev") or ranges.get("sku"))
+        right_anchor = ranges.get("rate") or ranges.get("amount")
+        if left_anchor and right_anchor:
+            left_edge = left_anchor[1]
+            if "hts" in ranges:
+                left_edge = max(left_edge, ranges["hts"][1])
+            if left_edge + 8.0 < right_anchor[0]:
+                ranges["branddesc"] = (left_edge, right_anchor[0])
 
     return y, ranges
 
@@ -560,8 +632,6 @@ def _extract_via_regex(pdf_path: str) -> List[List[Any]]:
 
     text = " ".join(_extract_all_text(pdf_path))
     text = re.sub(r"\s+", " ", text)
-    money_pat = r"(?:USD\s*)?\$?\d{1,3}(?:,\d{3})*\.\d{2}"
-    _MONEY_RE = re.compile(money_pat)
 
     pat = re.compile(
         r"(?P<qty>\d{1,4})\s+"
