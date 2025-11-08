@@ -17,7 +17,7 @@ import pandas as pd
 # Import your existing modules
 from core.parser import extract_header_meta, extract_table_rows
 from excel_io.excel_writer import write_to_excel
-from pdf_utils.logging_config import setup_logging
+from core.logging_config import setup_logging
 
 # -----------------------------------------------------------------------------
 # App & logging setup
@@ -26,7 +26,7 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = "your-secret-key-change-this"  # Change this in production
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max upload
 
 ALLOWED_EXTENSIONS = {"pdf"}
@@ -247,5 +247,9 @@ def cleanup_old_files(hours: int = 1):
 # Entrypoint
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
+    # Clean up old temporary files on startup
+    cleanup_old_files(hours=24)
+    logger.info("Cleaned up old temporary files")
+    
     # For local development. Consider using an env var for PORT when deploying.
     app.run(debug=True, host="0.0.0.0", port=5000)

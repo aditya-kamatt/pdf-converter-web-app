@@ -41,8 +41,6 @@ pdf-converter-web-app/
 │   └── logging_config.py      # Logging configuration
 ├── excel_io/
 │   └── excel_writer.py        # Excel file generation with formatting
-├── pdf_utils/
-│   └── logging_config.py      # PDF processing logging
 ├── templates/
 │   └── index.html             # Web UI template
 ├── tests/
@@ -291,6 +289,7 @@ pre-commit install
 
 None required for basic operation. Optional:
 
+- `SECRET_KEY`: Flask secret key for session management (uses default in development)
 - `FLASK_ENV`: Set to `development` for debug mode
 - `PORT`: Server port (default: 5000)
 
@@ -301,6 +300,9 @@ In `app.py`:
 ```python
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max upload
 ALLOWED_EXTENSIONS = {"pdf"}
+
+# Automatic cleanup of temporary files older than 24 hours on startup
+cleanup_old_files(hours=24)
 ```
 
 ## Error Handling
@@ -313,26 +315,41 @@ The application includes comprehensive error handling:
 - **File too large (>16MB)**: Returns 413 error
 - **Missing data in PDF**: Returns error with specifics
 
-## Troubleshooting
+## Results: Skills & Technologies Learned
 
-### Common Issues
+Through developing this application, I have gained experience with a diverse set of modern software engineering tools, libraries, and concepts, including:
 
-**PDF not processing:**
-- Ensure PDF contains actual tables (not just images)
-- Check PDF is not password-protected
-- Verify file size is under 16MB
+### Backend & Core Skills
+- **Python 3.13**: Advanced Python programming, including type annotation, exception handling, and file system operations.
+- **Flask**: Creating robust RESTful APIs, request handling, secure file uploads, and configuration management.
+- **PDF Processing**: Harnessing multiple libraries (`pdfplumber`, `PyPDF2`, `pdfminer.six`) for complex PDF extraction workflows, including table and regex-based parsing.
+- **Data Processing with pandas & numpy**: Cleaning, validating, and transforming tabular data efficiently, including use of DataFrames, type coercion, and advanced string operations.
+- **Custom Validation Logic**: Implementing domain-specific rules such as UPC check digit verification, arithmetic consistency checks, and missing data detection.
 
-**Tests failing locally:**
-```bash
-# Install test dependencies
-pip install pytest pytest-cov
+### Frontend & Presentation
+- **Jinja2 Templates**: Designing clean web interfaces with powerful templating and integration of modern CSS.
+- **User Experience**: Building user-centric workflows for seamless upload, feedback, error notification, and download.
 
-# Install system dependencies (Linux)
-sudo apt-get install libmagickwand-dev
-```
+### Excel Automation
+- **openpyxl**: Automated generation of multi-sheet, formatted Excel files, including summary and detail tabs.
 
-**ImportError for pdf-converter-sdk:**
-```bash
-# Reinstall from git
-pip install --force-reinstall git+https://github.com/aditya-kamatt/pdf-converter-sdk.git
-```
+### Testing & Quality Assurance
+- **pytest & pytest-cov**: Writing robust, maintainable unit and end-to-end tests.
+- **Golden Master Testing**: Building golden input/output test infrastructure to ensure regressions are caught across real-world sample PDFs.
+- **CI/CD Automation**: Leveraging GitHub Actions for automated testing and deployment.
+
+### DevOps & Best Practices
+- **Virtual Environments**: Managing dependencies and isolated development using Python venv.
+- **Git**: Effective use of version control for collaboration, branching, and code review.
+- **Deployment**: Automated cloud deployments using Railway, process management via Gunicorn, and environment configuration.
+- **Code Linting & Quality**: Enforcing formatting and quality standards with `.flake8`.
+
+### Soft Skills Developed
+- **Debugging & Error Handling**: Diagnosing complex parsing and production issues.
+- **Documentation**: Authoring clear README and code comments for future maintainers.
+- **Workflow Integration**: Coordinating between backend logic, frontend UI, and external stakeholders’ needs.
+
+This project provided hands-on experience with each stage of a cloud-native data-processing web tool, from low-level PDF extraction to cloud deployment and automated validation pipelines—a full-stack, production-grade learning journey.
+
+
+
