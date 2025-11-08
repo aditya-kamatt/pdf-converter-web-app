@@ -1,0 +1,138 @@
+name: CI - Test & Lint
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ opened, synchronize, reopened, ready_for_review ]
+  push:
+    branches: [ main ]
+
+jobs:
+  test:
+    # Skip if PR is in draft
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+        cache: 'pip'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libmagickwand-dev
+    
+    - name: Install Python dependencies
+      run: |
+        pip install --upgrade pip
+        pip install pytest pytest-cov flake8 black
+        pip install -r requirements.txt
+    
+    - name: 🔍 Code quality checks
+      run: |
+        echo "Running flake8..."
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=__pycache__,temp_uploads,temp_outputs
+        
+        echo "Checking code formatting..."
+        black --check --exclude '/(\.git|\.pytest_cache|__pycache__|temp_uploads|temp_outputs)/' . || echo "⚠️  Run 'black .' to format"
+      continue-on-error: true
+    
+    - name: Run test suite
+      run: |
+        pytest tests/ -v \
+          --cov=core \
+          --cov=excel_io \
+          --cov=app \
+          --cov-report=xml \
+          --cov-report=term-missing \
+          --tb=short
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      if: always()
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        fail_ci_if_error: false
+        token: ${{ secrets.CODECOV_TOKEN }}
+    
+    - name: Comment on PR - Success
+      if: github.event_name == 'pull_request' && success()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const comment = `## ✅ CI Passed!
+          
+          All checks completed successfully:
+          - ✓ Code quality checks passed
+          - ✓ Test suite passed
+          - ✓ Coverage report generated
+          
+          // Find existing bot comments
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number
+          });
+          
+          const botComment = comments.find(comment => 
+            comment.user.type === 'Bot' && comment.body.includes('CI Passed')
+          );
+          
+          if (botComment) {
+            // Update existing comment
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: botComment.id,
+              body: comment
+            });
+          } else {
+            // Create new comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
+          }
+    
+    - name: Comment on PR - Failure
+      if: github.event_name == 'pull_request' && failure()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const comment = `## ❌ CI Failed
+          
+          Some checks failed. Please review and fix:
+          
+          **Action Required:**
+          1. Check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId})
+          2. Fix any failing tests or linting issues
+          3. Push your changes to trigger a new run
+          
+          Need help? Check the test output above or ask for a review.`;
+          
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            body: comment
+          });
+    
+    - name:  Upload test artifacts (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-failure-artifacts-${{ github.run_number }}
+        path: |
+          temp_uploads/
+          temp_outputs/
+        retention-days: 7
+
