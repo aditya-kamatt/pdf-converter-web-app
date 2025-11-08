@@ -41,8 +41,6 @@ pdf-converter-web-app/
 │   └── logging_config.py      # Logging configuration
 ├── excel_io/
 │   └── excel_writer.py        # Excel file generation with formatting
-├── pdf_utils/
-│   └── logging_config.py      # PDF processing logging
 ├── templates/
 │   └── index.html             # Web UI template
 ├── tests/
