@@ -1,6 +1,9 @@
 # PDF Converter Web App
 
-Lightweight Flask application for converting purchase order sheets into structured data and files (e.g., text and spreadsheets), with simple upload → process → download flows and temporary storage for inputs/outputs.
+![CI/CD](https://github.com/aditya-kamatt/pdf-converter-web-app/workflows/CI%20-%20Test%20%26%20Lint/badge.svg)
+[![codecov](https://codecov.io/gh/aditya-kamatt/pdf-converter-web-app/branch/main/graph/badge.svg)](https://codecov.io/gh/aditya-kamatt/pdf-converter-web-app)
+
+Lightweight Flask application for converting PDFs into structured data and files (e.g., text and spreadsheets), with simple upload → process → download flows and temporary storage for inputs/outputs.
 
 ## Features
 

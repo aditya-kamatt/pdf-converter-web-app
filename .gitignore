@@ -1,9 +1,42 @@
+# Python artifacts
 __pycache__/
 *.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
 .env
 .venv/
+venv/
+env/
+ENV/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.tox/
+
+# Temp directories
 temp_uploads/*
 temp_outputs/*
 !temp_uploads/.gitkeep
 !temp_outputs/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.project
+.pydevproject
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
 PAT
