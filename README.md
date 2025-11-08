@@ -7,7 +7,7 @@ Lightweight Flask application for converting PDFs into structured data and files
 
 ## Features
 
-- Upload single or multiple PDF files.
+- Upload a single PDF file.
 - Convert pages to extracted **text**.
 - Export detected tabular data to **Excel/CSV**.
 - Basic PDF utilities (e.g., page selection, simple merges/splits if enabled).
