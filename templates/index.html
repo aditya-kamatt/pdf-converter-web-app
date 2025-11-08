@@ -175,7 +175,7 @@
     <h1>PDF to Excel Converter</h1>
     <p class="subtitle">Drop a PDF or click <b>Browse Files</b>. Max 16&nbsp;MB.</p>
 
-    <form id="uploadForm" enctype="multipart/form-data">
+    <form id="uploadForm" action="/convert" method="POST" enctype="multipart/form-data">
       <div class="upload-area" id="uploadArea">
         <div class="upload-icon">📄</div>
         <div class="upload-text">Drop your PDF here</div>
