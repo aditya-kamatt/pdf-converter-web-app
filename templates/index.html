@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PDF to Excel Converter</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='icon/Logo.png') }}">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='icon/Logo.png') }}">
+  <link rel="shortcut icon" href="{{ url_for('static', filename='icon/Logo.png') }}">
   <style>
     :root {
       --brand1: #667eea;
@@ -27,6 +30,90 @@
       justify-content: center;
       padding: 24px;
       color: #2c2c2c;
+      transition: background 0.3s ease;
+    }
+
+    /* Dark Mode Styles */
+    body.dark-mode {
+      --bg: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+      --card-bg: rgba(30, 41, 59, 0.85);
+      color: #e2e8f0;
+    }
+
+    body.dark-mode .container {
+      background: var(--card-bg);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    body.dark-mode h1 {
+      background: linear-gradient(135deg, #818cf8, #c084fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    body.dark-mode .subtitle {
+      color: #94a3b8;
+    }
+
+    body.dark-mode .upload-area {
+      background: rgba(51, 65, 85, 0.6);
+      border-color: rgba(129, 140, 248, 0.5);
+    }
+
+    body.dark-mode .upload-area:hover {
+      background: rgba(51, 65, 85, 0.8);
+      border-color: #818cf8;
+    }
+
+    body.dark-mode .upload-text {
+      color: #e2e8f0;
+    }
+
+    body.dark-mode .upload-subtext {
+      color: #94a3b8;
+    }
+
+    body.dark-mode .browse-btn {
+      background: linear-gradient(135deg, #818cf8, #c084fc);
+    }
+
+    body.dark-mode .file-chip {
+      background: rgba(51, 65, 85, 0.9);
+      border-color: #475569;
+      color: #e2e8f0;
+    }
+
+    body.dark-mode .file-chip small {
+      color: #94a3b8;
+    }
+
+    body.dark-mode .file-chip button {
+      color: #94a3b8;
+    }
+
+    body.dark-mode .file-chip button:hover {
+      color: #f87171;
+    }
+
+    body.dark-mode .toast {
+      background: #1e293b;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    }
+
+    body.dark-mode .toast-title {
+      color: #e2e8f0;
+    }
+
+    body.dark-mode .toast-message {
+      color: #94a3b8;
+    }
+
+    body.dark-mode .toast-close {
+      color: #64748b;
+    }
+
+    body.dark-mode .toast-close:hover {
+      color: #e2e8f0;
     }
 
     .container {
@@ -45,7 +132,7 @@
       background: linear-gradient(135deg, var(--brand1), var(--brand2));
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
-      margin-bottom: 8px;
+      margin: 0;
       font-weight: 800;
     }
 
@@ -68,6 +155,28 @@
       border-color: var(--brand2);
       background: rgba(255, 255, 255, 0.75);
       transform: translateY(-1px);
+    }
+
+    .upload-area.drag-over {
+      border-color: var(--accent);
+      background: rgba(74, 222, 128, 0.1);
+      transform: scale(1.02);
+      box-shadow: 0 0 0 4px rgba(74, 222, 128, 0.2);
+    }
+
+    .upload-area.drag-over .upload-icon {
+      animation: bounce 0.5s ease infinite;
+      color: var(--accent);
+    }
+
+    .upload-area.file-selected {
+      border-color: var(--accent);
+      background: rgba(74, 222, 128, 0.05);
+    }
+
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
     }
 
     .upload-icon {
@@ -140,6 +249,167 @@
       color: #ef4444;
     }
 
+    /* File Preview Styles */
+    .file-preview {
+      display: none;
+      margin: 24px auto;
+      background: white;
+      border-radius: 16px;
+      padding: 20px;
+      max-width: 450px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      animation: slideDown 0.3s ease;
+    }
+
+    .file-preview.active {
+      display: block;
+    }
+
+    @keyframes slideDown {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .file-preview-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .pdf-icon {
+      width: 56px;
+      height: 56px;
+      background: linear-gradient(135deg, #ef4444, #f87171);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      flex-shrink: 0;
+      box-shadow: 0 4px 8px rgba(239, 68, 68, 0.2);
+    }
+
+    .file-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .file-name {
+      font-weight: 600;
+      color: #333;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 4px;
+      font-size: 0.95rem;
+    }
+
+    .file-meta {
+      display: flex;
+      gap: 12px;
+      font-size: 0.85rem;
+      color: #777;
+    }
+
+    .file-meta-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .remove-file-btn {
+      background: #fee;
+      color: #ef4444;
+      border: none;
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.2s ease;
+    }
+
+    .remove-file-btn:hover {
+      background: #ef4444;
+      color: white;
+      transform: scale(1.1);
+    }
+
+    .validation-checks {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 10px;
+      padding: 12px 16px;
+    }
+
+    .validation-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #166534;
+      margin-bottom: 8px;
+    }
+
+    .check-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      font-size: 0.9rem;
+      color: #166534;
+    }
+
+    .check-icon {
+      color: #16a34a;
+      font-weight: bold;
+    }
+
+    /* Dark mode file preview */
+    body.dark-mode .file-preview {
+      background: #1e293b;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+
+    body.dark-mode .file-name {
+      color: #e2e8f0;
+    }
+
+    body.dark-mode .file-meta {
+      color: #94a3b8;
+    }
+
+    body.dark-mode .validation-checks {
+      background: rgba(34, 197, 94, 0.1);
+      border-color: rgba(34, 197, 94, 0.3);
+    }
+
+    body.dark-mode .validation-title {
+      color: #86efac;
+    }
+
+    body.dark-mode .check-item {
+      color: #d1fae5;
+    }
+
+    body.dark-mode .remove-file-btn {
+      background: rgba(239, 68, 68, 0.2);
+      color: #f87171;
+    }
+
+    body.dark-mode .remove-file-btn:hover {
+      background: #ef4444;
+      color: white;
+    }
+
     .convert-btn {
       background: linear-gradient(135deg, #16a34a, #86efac);
       color: #fff;
@@ -168,11 +438,661 @@
       color: #888;
       font-size: 0.85rem;
     }
+
+    /* Loading Overlay Styles */
+    .loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .loading-overlay.active {
+      display: flex;
+    }
+
+    .loading-spinner {
+      text-align: center;
+      color: white;
+    }
+
+    .spinner {
+      border: 4px solid rgba(255, 255, 255, 0.3);
+      border-top: 4px solid #fff;
+      border-radius: 50%;
+      width: 60px;
+      height: 60px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 20px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .progress-text {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .progress-subtext {
+      font-size: 0.9rem;
+      opacity: 0.8;
+    }
+
+    /* Toast Notification Styles */
+    .toast-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 2000;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .toast {
+      background: white;
+      padding: 16px 20px;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 300px;
+      max-width: 400px;
+      animation: slideIn 0.3s ease;
+      border-left: 4px solid;
+    }
+
+    .toast.success {
+      border-left-color: #16a34a;
+    }
+
+    .toast.error {
+      border-left-color: #ef4444;
+    }
+
+    .toast.warning {
+      border-left-color: #f59e0b;
+    }
+
+    .toast-icon {
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+
+    .toast-content {
+      flex: 1;
+    }
+
+    .toast-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: #333;
+    }
+
+    .toast-message {
+      font-size: 0.9rem;
+      color: #666;
+    }
+
+    .toast-close {
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: #999;
+      padding: 0;
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+      transition: color 0.2s ease;
+    }
+
+    .toast-close:hover {
+      color: #333;
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    @keyframes slideOut {
+      from {
+        transform: translateX(0);
+        opacity: 1;
+      }
+      to {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+    }
+
+    .toast.removing {
+      animation: slideOut 0.3s ease forwards;
+    }
+
+    /* Theme Toggle Button */
+    .theme-toggle {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(255, 255, 255, 0.9);
+      border: none;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      transition: all 0.3s ease;
+      z-index: 1000;
+      backdrop-filter: blur(8px);
+    }
+
+    .theme-toggle:hover {
+      transform: scale(1.1) rotate(15deg);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+    }
+
+    .theme-toggle:active {
+      transform: scale(0.95);
+    }
+
+    body.dark-mode .theme-toggle {
+      background: rgba(51, 65, 85, 0.9);
+    }
+
+    /* Success Modal Styles */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 3000;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      backdrop-filter: blur(4px);
+    }
+
+    .modal.active {
+      display: flex;
+    }
+
+    .modal-content {
+      background: white;
+      border-radius: 20px;
+      padding: 32px;
+      max-width: 500px;
+      width: 100%;
+      max-height: 80vh;
+      overflow-y: auto;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      animation: modalSlideUp 0.3s ease;
+    }
+
+    @keyframes modalSlideUp {
+      from {
+        transform: translateY(50px);
+        opacity: 0;
+      }
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+
+    .modal-header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .modal-icon {
+      font-size: 64px;
+      margin-bottom: 12px;
+    }
+
+    .modal-title {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #333;
+      margin-bottom: 8px;
+    }
+
+    .modal-subtitle {
+      color: #666;
+      font-size: 0.95rem;
+    }
+
+    .metadata-preview {
+      background: #f8f9fa;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 20px 0;
+    }
+
+    .metadata-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #e9ecef;
+    }
+
+    .metadata-row:last-child {
+      border-bottom: none;
+    }
+
+    .metadata-label {
+      font-weight: 600;
+      color: #555;
+    }
+
+    .metadata-value {
+      color: #333;
+      text-align: right;
+      max-width: 60%;
+      word-break: break-word;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .modal-btn {
+      flex: 1;
+      padding: 12px 24px;
+      border-radius: 999px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-size: 0.95rem;
+    }
+
+    .modal-btn.primary {
+      background: linear-gradient(135deg, #16a34a, #86efac);
+      color: white;
+    }
+
+    .modal-btn.secondary {
+      background: #f1f3f5;
+      color: #495057;
+    }
+
+    .modal-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    /* Dark mode modal */
+    body.dark-mode .modal-content {
+      background: #1e293b;
+    }
+
+    body.dark-mode .modal-title {
+      color: #e2e8f0;
+    }
+
+    body.dark-mode .modal-subtitle {
+      color: #94a3b8;
+    }
+
+    body.dark-mode .metadata-preview {
+      background: #0f172a;
+    }
+
+    body.dark-mode .metadata-row {
+      border-bottom-color: #334155;
+    }
+
+    body.dark-mode .metadata-label {
+      color: #94a3b8;
+    }
+
+    body.dark-mode .metadata-value {
+      color: #e2e8f0;
+    }
+
+    body.dark-mode .modal-btn.secondary {
+      background: #334155;
+      color: #e2e8f0;
+    }
+
+    /* Mobile and Tablet Responsive Adjustments */
+    @media (max-width: 768px) {
+      .container {
+        padding: 32px 24px;
+      }
+
+      h1 {
+        font-size: 1.9rem;
+      }
+
+      .upload-area {
+        padding: 36px 20px;
+      }
+
+      .upload-icon {
+        font-size: 36px;
+      }
+
+      .browse-btn {
+        padding: 10px 24px;
+        font-size: 0.9rem;
+      }
+
+      .convert-btn {
+        width: 100%;
+        padding: 16px 36px;
+        font-size: 1rem;
+      }
+
+      .file-preview {
+        padding: 16px;
+        max-width: 100%;
+      }
+
+      .pdf-icon {
+        width: 48px;
+        height: 48px;
+        font-size: 24px;
+      }
+
+      .file-name {
+        font-size: 0.9rem;
+      }
+
+      .validation-checks {
+        padding: 12px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      body {
+        padding: 16px;
+      }
+
+      .container {
+        padding: 24px 20px;
+      }
+
+      h1 {
+        font-size: 1.7rem;
+      }
+
+      .subtitle {
+        font-size: 0.9rem;
+      }
+
+      .theme-toggle {
+        top: 10px;
+        right: 10px;
+        width: 40px;
+        height: 40px;
+        font-size: 20px;
+      }
+
+      .toast-container {
+        right: 10px;
+        top: 60px;
+        left: 10px;
+      }
+
+      .toast {
+        min-width: auto;
+        max-width: 100%;
+      }
+
+      .toast-icon {
+        font-size: 20px;
+      }
+
+      .toast-content {
+        font-size: 0.85rem;
+      }
+
+      .toast-title {
+        font-size: 0.9rem;
+      }
+
+      .toast-message {
+        font-size: 0.8rem;
+      }
+
+      .upload-area {
+        padding: 28px 16px;
+      }
+
+      .upload-text {
+        font-size: 1rem;
+      }
+
+      .upload-subtext {
+        font-size: 0.85rem;
+      }
+
+      .modal {
+        padding: 12px;
+      }
+
+      .modal-content {
+        padding: 24px 20px;
+        max-height: 90vh;
+      }
+
+      .modal-icon {
+        font-size: 48px;
+      }
+
+      .modal-title {
+        font-size: 1.3rem;
+      }
+
+      .modal-subtitle {
+        font-size: 0.85rem;
+      }
+
+      .metadata-preview {
+        padding: 16px;
+        margin: 16px 0;
+      }
+
+      .metadata-row {
+        flex-direction: column;
+        gap: 4px;
+        padding: 10px 0;
+      }
+
+      .metadata-value {
+        max-width: 100%;
+        text-align: left;
+        font-size: 0.9rem;
+      }
+
+      .metadata-label {
+        font-size: 0.85rem;
+      }
+
+      .modal-actions {
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .modal-btn {
+        width: 100%;
+        padding: 14px 24px;
+      }
+
+      .file-preview {
+        padding: 14px;
+        margin: 20px auto;
+      }
+
+      .file-preview-header {
+        gap: 12px;
+      }
+
+      .remove-file-btn {
+        width: 28px;
+        height: 28px;
+        font-size: 16px;
+      }
+
+      .check-item {
+        font-size: 0.85rem;
+      }
+
+      .loading-spinner {
+        padding: 0 20px;
+      }
+
+      .progress-text {
+        font-size: 1rem;
+      }
+
+      .progress-subtext {
+        font-size: 0.85rem;
+      }
+
+      .spinner {
+        width: 50px;
+        height: 50px;
+      }
+    }
+
+    /* Very small mobile devices */
+    @media (max-width: 380px) {
+      h1 {
+        font-size: 1.5rem;
+      }
+
+      .container {
+        padding: 20px 16px;
+      }
+
+      .upload-area {
+        padding: 24px 12px;
+      }
+
+      .browse-btn {
+        padding: 10px 20px;
+        font-size: 0.85rem;
+      }
+
+      .convert-btn {
+        padding: 14px 28px;
+        font-size: 0.95rem;
+      }
+
+      .file-meta {
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .theme-toggle {
+        width: 36px;
+        height: 36px;
+        font-size: 18px;
+      }
+    }
+
+    /* Landscape mobile */
+    @media (max-width: 900px) and (max-height: 500px) {
+      .container {
+        max-width: 90%;
+      }
+
+      .modal-content {
+        max-height: 95vh;
+      }
+
+      h1 {
+        font-size: 1.5rem;
+        margin-bottom: 4px;
+      }
+
+      .subtitle {
+        margin-bottom: 16px;
+      }
+
+      .upload-area {
+        padding: 20px 16px;
+      }
+
+      .file-preview {
+        margin: 16px auto;
+      }
+    }
+
+    /* App Logo Styles */
+    .logo-header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+
+    .app-logo {
+      height: 48px;
+      width: auto;
+      mix-blend-mode: multiply;
+      filter: brightness(1.2);
+      transition: all 0.3s ease;
+    }
+
+    body.dark-mode .app-logo {
+      mix-blend-mode: screen;
+      filter: brightness(1.3);
+    }
+
+    @media (max-width: 640px) {
+      .app-logo {
+        height: 40px;
+      }
+
+      .logo-header {
+        gap: 12px;
+      }
+    }
   </style>
 </head>
 <body>
+  <!-- Theme Toggle Button -->
+  <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode">
+    🌙
+  </button>
+
   <div class="container">
-    <h1>PDF to Excel Converter</h1>
+    <div class="logo-header">
+      <img src="{{ url_for('static', filename='icon/Logo.png') }}" alt="Logo" class="app-logo">
+      <h1>PDF to Excel Converter</h1>
+    </div>
     <p class="subtitle">Drop a PDF or click <b>Browse Files</b>. Max 16&nbsp;MB.</p>
 
     <form id="uploadForm" action="/convert" method="POST" enctype="multipart/form-data">
@@ -184,25 +1104,126 @@
         <button type="button" class="browse-btn" id="browseBtn">Browse Files</button>
       </div>
 
-      <div id="fileChip" class="file-chip" style="display:none;">
-        <span id="fileName"></span>
-        <small id="fileSize"></small>
-        <button type="button" id="removeFile">×</button>
+      <!-- File Preview Card -->
+      <div class="file-preview" id="filePreview">
+        <div class="file-preview-header">
+          <div class="pdf-icon">📄</div>
+          <div class="file-info">
+            <div class="file-name" id="previewFileName"></div>
+            <div class="file-meta">
+              <span class="file-meta-item" id="previewFileSize">📦 0 MB</span>
+              <span class="file-meta-item">📑 PDF</span>
+            </div>
+          </div>
+          <button type="button" class="remove-file-btn" id="removePreview" aria-label="Remove file">×</button>
+        </div>
       </div>
 
       <button type="submit" class="convert-btn" id="convertBtn" disabled>Convert to Excel</button>
     </form>
   </div>
 
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-spinner">
+      <div class="spinner"></div>
+      <div class="progress-text">Converting your PDF...</div>
+      <div class="progress-subtext">This may take a few moments</div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Success Modal -->
+  <div class="modal" id="successModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-icon">🎉</div>
+        <div class="modal-title">Conversion Complete!</div>
+        <div class="modal-subtitle">Your Excel file is ready</div>
+      </div>
+      
+      <div class="metadata-preview" id="metadataPreview">
+        <!-- Will be populated dynamically -->
+      </div>
+      
+      <div class="modal-actions">
+        <button class="modal-btn secondary" id="convertAnother">Convert Another</button>
+        <button class="modal-btn primary" id="downloadNow">Download File</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const fileInput = document.getElementById('fileInput');
     const browseBtn = document.getElementById('browseBtn');
     const uploadArea = document.getElementById('uploadArea');
-    const fileChip = document.getElementById('fileChip');
-    const fileName = document.getElementById('fileName');
-    const fileSize = document.getElementById('fileSize');
-    const removeFile = document.getElementById('removeFile');
+    const filePreview = document.getElementById('filePreview');
+    const previewFileName = document.getElementById('previewFileName');
+    const previewFileSize = document.getElementById('previewFileSize');
+    const removePreview = document.getElementById('removePreview');
     const convertBtn = document.getElementById('convertBtn');
+
+    // Toast notification function
+    function showToast(title, message, type = 'success') {
+      const container = document.getElementById('toastContainer');
+      const icons = {
+        success: '✓',
+        error: '✗',
+        warning: '⚠'
+      };
+      
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.innerHTML = `
+        <div class="toast-icon">${icons[type]}</div>
+        <div class="toast-content">
+          <div class="toast-title">${title}</div>
+          <div class="toast-message">${message}</div>
+        </div>
+        <button class="toast-close" aria-label="Close notification">×</button>
+      `;
+      
+      container.appendChild(toast);
+      
+      const closeBtn = toast.querySelector('.toast-close');
+      const removeToast = () => {
+        toast.classList.add('removing');
+        setTimeout(() => toast.remove(), 300);
+      };
+      
+      closeBtn.onclick = removeToast;
+      
+      // Auto-dismiss after 5 seconds
+      setTimeout(removeToast, 5000);
+    }
+
+    // Theme Toggle Functionality
+    const themeToggle = document.getElementById('themeToggle');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+    // Load saved theme or use system preference
+    const savedTheme = localStorage.getItem('theme') || (prefersDark ? 'dark' : 'light');
+    if (savedTheme === 'dark') {
+      document.body.classList.add('dark-mode');
+      themeToggle.textContent = '☀️';
+    }
+
+    // Toggle theme on button click
+    themeToggle.addEventListener('click', () => {
+      document.body.classList.toggle('dark-mode');
+      const isDark = document.body.classList.contains('dark-mode');
+      themeToggle.textContent = isDark ? '☀️' : '🌙';
+      localStorage.setItem('theme', isDark ? 'dark' : 'light');
+      
+      // Show toast for feedback
+      showToast(
+        'Theme Changed',
+        `Switched to ${isDark ? 'dark' : 'light'} mode`,
+        'success'
+      );
+    });
 
     const formatSize = (bytes) => {
       const kb = 1024, sizes = ['Bytes', 'KB', 'MB'];
@@ -211,48 +1232,180 @@
     };
 
     function showFile(file) {
-      fileName.textContent = file.name;
-      fileSize.textContent = '· ' + formatSize(file.size);
-      fileChip.style.display = 'inline-flex';
+      previewFileName.textContent = file.name;
+      previewFileSize.textContent = '📦 ' + formatSize(file.size);
+      filePreview.classList.add('active');
       convertBtn.disabled = false;
+      uploadArea.classList.add('file-selected');
     }
 
     function clearFile() {
       fileInput.value = '';
-      fileChip.style.display = 'none';
+      filePreview.classList.remove('active');
       convertBtn.disabled = true;
+      uploadArea.classList.remove('file-selected');
     }
 
-    browseBtn.addEventListener('click', () => fileInput.click());
-    removeFile.addEventListener('click', clearFile);
-    uploadArea.addEventListener('click', () => fileInput.click());
+    browseBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      fileInput.click();
+    });
+    
+    removePreview.addEventListener('click', clearFile);
+    
+    uploadArea.addEventListener('click', (e) => {
+      // Only trigger if clicking the upload area itself, not child elements
+      if (e.target === uploadArea || e.target.closest('.upload-icon, .upload-text, .upload-subtext')) {
+        fileInput.click();
+      }
+    });
 
     uploadArea.addEventListener('dragover', e => {
       e.preventDefault();
-      uploadArea.style.borderColor = '#764ba2';
-      uploadArea.style.background = 'rgba(255,255,255,0.8)';
+      uploadArea.classList.add('drag-over');
     });
 
-    uploadArea.addEventListener('dragleave', () => {
-      uploadArea.style.borderColor = 'rgba(102, 126, 234, 0.6)';
-      uploadArea.style.background = 'rgba(255,255,255,0.6)';
+    uploadArea.addEventListener('dragleave', e => {
+      // Only remove if actually leaving the upload area
+      if (e.target === uploadArea) {
+        uploadArea.classList.remove('drag-over');
+      }
+    });
+
+    uploadArea.addEventListener('dragenter', e => {
+      e.preventDefault();
+      uploadArea.classList.add('drag-over');
     });
 
     uploadArea.addEventListener('drop', e => {
       e.preventDefault();
+      uploadArea.classList.remove('drag-over');
+      
       const file = e.dataTransfer.files[0];
-      if (file && file.type === 'application/pdf' && file.size <= 16 * 1024 * 1024) {
+      if (file && file.type === 'application/pdf') {
+        if (file.size > 16 * 1024 * 1024) {
+          showToast('File Too Large', 'Please select a PDF under 16MB', 'error');
+          return;
+        }
         fileInput.files = e.dataTransfer.files;
         showFile(file);
-      } else alert('Invalid file. Please select a PDF under 16MB.');
+      } else {
+        showToast('Invalid File', 'Please select a PDF file', 'error');
+      }
     });
 
     fileInput.addEventListener('change', e => {
       const file = e.target.files[0];
-      if (file) showFile(file);
+      if (file) {
+        if (file.type !== 'application/pdf') {
+          showToast('Invalid File', 'Please select a PDF file', 'error');
+          fileInput.value = '';
+          return;
+        }
+        if (file.size > 16 * 1024 * 1024) {
+          showToast('File Too Large', 'Please select a PDF under 16MB', 'error');
+          fileInput.value = '';
+          return;
+        }
+        showFile(file);
+      }
     });
 
-    // Keep your conversion logic (backend fetch) as before
+    // AJAX form submission with modal
+    const uploadForm = document.getElementById('uploadForm');
+    const loadingOverlay = document.getElementById('loadingOverlay');
+    const successModal = document.getElementById('successModal');
+    const metadataPreview = document.getElementById('metadataPreview');
+    const convertAnother = document.getElementById('convertAnother');
+    const downloadNow = document.getElementById('downloadNow');
+    
+    let downloadUrl = '';
+
+    uploadForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      
+      // Show loading overlay
+      loadingOverlay.classList.add('active');
+      convertBtn.disabled = true;
+      convertBtn.textContent = 'Converting...';
+      
+      try {
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+        
+        // Call API endpoint
+        const response = await fetch('/api/convert', {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (!response.ok) {
+          throw new Error('Conversion failed');
+        }
+        
+        const data = await response.json();
+        
+        // Hide loading
+        loadingOverlay.classList.remove('active');
+        convertBtn.disabled = false;
+        convertBtn.textContent = 'Convert to Excel';
+        
+        // Store download URL
+        downloadUrl = data.download_url;
+        
+        // Populate metadata
+        const metadata = data.metadata || {};
+        metadataPreview.innerHTML = `
+          <div class="metadata-row">
+            <span class="metadata-label">PO Number</span>
+            <span class="metadata-value">${metadata.po_number || 'N/A'}</span>
+          </div>
+          <div class="metadata-row">
+            <span class="metadata-label">Vendor Number</span>
+            <span class="metadata-value">${metadata.vendor_number || 'N/A'}</span>
+          </div>
+          <div class="metadata-row">
+            <span class="metadata-label">Ship Date</span>
+            <span class="metadata-value">${metadata.ship_by_date || 'N/A'}</span>
+          </div>
+          <div class="metadata-row">
+            <span class="metadata-label">Payment Terms</span>
+            <span class="metadata-value">${metadata.payment_terms || 'N/A'}</span>
+          </div>
+          <div class="metadata-row">
+            <span class="metadata-label">Total</span>
+            <span class="metadata-value">$${metadata.total || 'N/A'}</span>
+          </div>
+          <div class="metadata-row">
+            <span class="metadata-label">Rows Processed</span>
+            <span class="metadata-value">${data.rows_processed || 0}</span>
+          </div>
+        `;
+        
+        // Show success modal
+        successModal.classList.add('active');
+        
+      } catch (error) {
+        loadingOverlay.classList.remove('active');
+        convertBtn.disabled = false;
+        convertBtn.textContent = 'Convert to Excel';
+        showToast('Conversion Failed', error.message || 'An error occurred', 'error');
+      }
+    });
+    
+    // Download button in modal
+    downloadNow.addEventListener('click', () => {
+      if (downloadUrl) {
+        window.location.href = downloadUrl;
+        showToast('Download Started', 'Your file is downloading', 'success');
+      }
+    });
+    
+    // Convert another button
+    convertAnother.addEventListener('click', () => {
+      successModal.classList.remove('active');
+      clearFile();
+    });
   </script>
 </body>
 </html>
