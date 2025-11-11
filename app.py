@@ -235,7 +235,7 @@ def cleanup_old_files(hours: int = 1):
     for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER]:
         for fname in os.listdir(folder):
             fpath = os.path.join(folder, fname)
-            if os.path.isfile(fpath) and os.path.getctime(fpath) < cutoff:
+            if os.path.isfile(fpath) and os.path.getmtime(fpath) < cutoff:
                 try:
                     os.remove(fpath)
                     logger.info(f"Cleaned up old file: {fpath}")

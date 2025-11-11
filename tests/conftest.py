@@ -11,6 +11,43 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]          #Project repo root
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+# ============================================================================
+# Custom pytest options
+# ============================================================================
+
+def pytest_addoption(parser):
+    """Add custom command-line options for pytest."""
+    parser.addoption(
+        "--all",
+        action="store_true",
+        default=False,
+        help="Run all tests including integration, golden, and formatting tests"
+    )
+
+
+def pytest_configure(config):
+    """Configure pytest based on command-line options."""
+    config.addinivalue_line(
+        "markers", "integration: mark test as integration test (slower)"
+    )
+    config.addinivalue_line(
+        "markers", "formatting: mark test as formatting verification test"
+    )
+    config.addinivalue_line(
+        "markers", "error_recovery: mark test as error recovery test"
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Modify test collection based on --all flag."""
+    if config.getoption("--all"):
+        # Run everything when --all is specified
+        return
+    
+    # By default, run all tests (no filtering)
+    # This can be customized in the future if needed
+
 @pytest.fixture
 def app_module(tmp_path, monkeypatch):
     import importlib
