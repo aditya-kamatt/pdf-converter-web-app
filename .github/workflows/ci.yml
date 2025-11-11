@@ -7,6 +7,11 @@ on:
   push:
     branches: [ main ]
 
+# Cancel outdated workflow runs when new commits are pushed
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: write
@@ -14,7 +19,7 @@ permissions:
   checks: write
 
 jobs:
-  test:
+  lint:
     # Skip if PR is in draft
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
@@ -29,6 +34,28 @@ jobs:
         python-version: '3.13'
         cache: 'pip'
     
+    - name: 🔍 Run pre-commit hooks
+      uses: pre-commit/action@v3.0.1
+
+  test:
+    # Skip if PR is in draft
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+    
     - name: Install system dependencies
       run: |
         sudo apt-get update
@@ -37,17 +64,8 @@ jobs:
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip
-        pip install pytest pytest-cov flake8 black
+        pip install pytest pytest-cov
         pip install -r requirements.txt
-    
-    - name: 🔍 Code quality checks
-      run: |
-        echo "Running flake8..."
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=__pycache__,temp_uploads,temp_outputs
-        
-        echo "Checking code formatting..."
-        black --check --exclude '/(\.git|\.pytest_cache|__pycache__|temp_uploads|temp_outputs)/' . || echo "⚠️  Run 'black .' to format"
-      continue-on-error: true
     
     - name: Run test suite
       run: |
@@ -61,15 +79,41 @@ jobs:
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
-      if: always()
+      if: always() && matrix.python-version == '3.13'
       with:
         file: ./coverage.xml
         flags: unittests
         fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
     
+    - name: Upload test artifacts (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-failure-artifacts-${{ matrix.python-version }}-${{ github.run_number }}
+        path: |
+          temp_uploads/
+          temp_outputs/
+        retention-days: 7
+        if-no-files-found: ignore
+
+  # Summary job that depends on both lint and test
+  ci-summary:
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Check if all jobs passed
+      run: |
+        if [ "${{ needs.lint.result }}" != "success" ] || [ "${{ needs.test.result }}" != "success" ]; then
+          echo "CI checks failed!"
+          exit 1
+        fi
+        echo "All CI checks passed!"
+    
     - name: Comment on PR - Success
-      if: github.event_name == 'pull_request' && success()
+      if: github.event_name == 'pull_request' && needs.lint.result == 'success' && needs.test.result == 'success'
       uses: actions/github-script@v7
       with:
         script: |
@@ -77,7 +121,7 @@ jobs:
           
           All checks completed successfully:
           - ✓ Code quality checks passed
-          - ✓ Test suite passed
+          - ✓ Test suite passed on Python 3.10, 3.11, 3.12, and 3.13
           - ✓ Coverage report generated
           
           **Ready for review!**
@@ -92,7 +136,7 @@ jobs:
           });
           
           const botComment = comments.find(comment => 
-            comment.user.type === 'Bot' && comment.body.includes('CI Passed')
+            comment.user.type === 'Bot' && (comment.body.includes('CI Passed') || comment.body.includes('CI Failed'))
           );
           
           if (botComment) {
@@ -114,13 +158,20 @@ jobs:
           }
     
     - name: Comment on PR - Failure
-      if: github.event_name == 'pull_request' && failure()
+      if: github.event_name == 'pull_request' && (needs.lint.result != 'success' || needs.test.result != 'success')
       uses: actions/github-script@v7
       with:
         script: |
+          const lintStatus = '${{ needs.lint.result }}' === 'success' ? '✓' : '❌';
+          const testStatus = '${{ needs.test.result }}' === 'success' ? '✓' : '❌';
+          
           const comment = `## ❌ CI Failed
           
           Some checks failed. Please review and fix:
+          
+          **Status:**
+          - ${lintStatus} Linting and formatting
+          - ${testStatus} Test suite
           
           **Action Required:**
           1. Check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId})
@@ -129,21 +180,32 @@ jobs:
           
           Need help? Check the test output above or ask for a review.`;
           
-          await github.rest.issues.createComment({
+          // Find existing bot comments
+          const { data: comments } = await github.rest.issues.listComments({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            issue_number: context.issue.number,
-            body: comment
+            issue_number: context.issue.number
           });
-    
-    - name: Upload test artifacts (on failure)
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: test-failure-artifacts-${{ github.run_number }}
-        path: |
-          temp_uploads/
-          temp_outputs/
-        retention-days: 7
-        if-no-files-found: ignore
+          
+          const botComment = comments.find(comment => 
+            comment.user.type === 'Bot' && (comment.body.includes('CI Passed') || comment.body.includes('CI Failed'))
+          );
+          
+          if (botComment) {
+            // Update existing comment
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: botComment.id,
+              body: comment
+            });
+          } else {
+            // Create new comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
+          }
 
