@@ -65,7 +65,7 @@ def _normalise(df: pd.DataFrame, sort_keys: list[str] | None = None) -> pd.DataF
 
 def _read_excel_sheets(path: pathlib.Path) -> Dict[str, pd.DataFrame]:
     """
-    Read all sheets as object dtype, so we can normalise and coerce ourselves.
+    Read all sheets as object dtype to enable controlled normalization and coercion.
     """
     xls = pd.ExcelFile(path)
     out: Dict[str, pd.DataFrame] = {}
@@ -126,6 +126,10 @@ def test_pdf_to_excel_matches_golden(tmp_path, pdf_name, update_golden):
         pytest.skip(f"Golden updated for {pdf_name}")
 
     _compare_workbooks(out_xlsx, exp_xlsx, tmp_path)
+
+
+
+
 
 
 

@@ -7,6 +7,20 @@ _configured = False  # simple idempotency guard
 
 
 def setup_logging() -> None:
+    """
+    Configure application-wide logging using a dictConfig setup.
+
+    Environment Variables:
+        LOG_LEVEL: Root logger level (default: "INFO").
+        LOG_LEVEL_PDFMINER: Level for the `pdfminer` logger (default: "INFO").
+        LOG_USE_UTC: If "1"/"true"/"yes", use UTC timestamps (default: enabled).
+        LOG_FILE: Optional path to enable a rotating file handler.
+
+    Notes:
+        - A console handler is always configured.
+        - If LOG_FILE is provided, a rotating file handler is added.
+        - The function is idempotent and returns immediately on subsequent calls.
+    """
     global _configured
     if _configured:
         return
@@ -53,7 +67,7 @@ def setup_logging() -> None:
                 "handlers": ["console"],
                 "propagate": False,
             },
-            # Uncomment if you use Flask
+            # Uncomment to enable Flask's werkzeug logger
             # "werkzeug": {"level": "INFO", "handlers": ["console"], "propagate": False},
         },
     }

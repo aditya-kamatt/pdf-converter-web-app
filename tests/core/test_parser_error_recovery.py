@@ -123,7 +123,7 @@ class TestAllExtractionMethodsFail:
     def test_all_methods_fail_returns_header_only(self, monkeypatch):
         """
         Test that when all extraction methods fail or return unreasonable data,
-        we return at least the header
+        at least the header is returned
         """
         def fail_all(path):
             return [HEADER]  # Unreasonable - no data
@@ -349,7 +349,7 @@ class TestAmountComputationFallback:
         result = extract_table_rows("fake.pdf")
         
         # The extraction methods should handle this internally
-        # Just verify we get data back
+        # Verify that data is returned
         assert len(result) >= 1
 
     def test_zero_rate_zero_amount(self):

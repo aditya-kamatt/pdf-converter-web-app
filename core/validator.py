@@ -33,6 +33,25 @@ def _upc_ok(upc):
     return check == ds[-1]
 
 def run_qa_checks(df: pd.DataFrame, meta: dict) -> dict:
+    """
+    Run QA validations on the parsed DataFrame and optional metadata.
+
+    Checks include:
+        1) Required columns present.
+        2) Quantity values are positive.
+        3) UPC format and check digit validation (UPC-A).
+        4) Arithmetic integrity: |Qty*Rate - Amount| <= 0.01 for rows with prices.
+        5) Optional reconciliation of workbook total against PDF header total.
+
+    Args:
+        df: DataFrame of extracted order rows.
+        meta: Metadata dictionary that may include a 'total' string value.
+
+    Returns:
+        A dictionary with:
+            - ok: Boolean indicating whether all checks passed.
+            - summary: List of human-readable issue descriptions.
+    """
     issues = []
 
     # 1) Columns present

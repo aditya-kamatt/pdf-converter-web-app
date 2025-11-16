@@ -14,7 +14,7 @@ import logging
 from datetime import datetime
 import pandas as pd
 
-# Import your existing modules
+# Import project modules
 from core.parser import extract_header_meta, extract_table_rows
 from excel_io.excel_writer import write_to_excel
 from core.logging_config import setup_logging
@@ -42,12 +42,34 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 
 def allowed_file(filename: str) -> bool:
-    """Return True if the file extension is allowed (PDF)."""
+    """
+    Check whether the uploaded filename has an allowed extension.
+
+    Args:
+        filename: The original filename from the upload.
+
+    Returns:
+        True if the extension is in the allowed set (currently PDF); otherwise False.
+    """
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def extract_data_from_pdf(pdf_path: str):
-    """Extract metadata and tabular data from a PDF and return (meta, DataFrame)."""
+    """
+    Extract purchase order metadata and tabular line items from a PDF.
+
+    Args:
+        pdf_path: Absolute or relative path to the PDF file.
+
+    Returns:
+        A tuple of:
+            - meta: Dictionary of header fields (e.g., PO number, totals).
+            - df: Pandas DataFrame containing the extracted line items.
+
+    Raises:
+        ValueError: If no data rows are found in the PDF.
+        Exception: For unexpected extraction errors (logged and re-raised).
+    """
     try:
         meta = extract_header_meta(pdf_path)
         logger.info(f"Extracted metadata: {meta}")
@@ -74,14 +96,27 @@ def extract_data_from_pdf(pdf_path: str):
 
 @app.route("/")
 def index():
-    """Main upload page."""
-    # You can pass defaults to the template if you want to pre-select an option
+    """
+    Render the main upload page.
+
+    Returns:
+        HTML response for the upload form.
+    """
     return render_template("index.html")
 
 
 @app.route("/convert", methods=["POST"])
 def convert_pdf():
-    """Handle PDF conversion via web form."""
+    """
+    Convert an uploaded PDF to an Excel workbook via the web form.
+
+    Returns:
+        A Flask redirect or a file download response for the generated workbook.
+
+    Raises:
+        Exception: Any unexpected error during conversion results in user-facing flash
+        messaging and a redirect back to the index page.
+    """
     try:
         if "file" not in request.files:
             flash("No file selected", "error")
@@ -133,7 +168,13 @@ def convert_pdf():
 
 @app.route("/api/convert", methods=["POST"])
 def api_convert():
-    """API endpoint for programmatic PDF -> Excel conversion."""
+    """
+    API endpoint to convert an uploaded PDF into an Excel workbook.
+
+    Returns:
+        JSON response containing conversion metadata and a download URL on success.
+        On failure, returns a JSON error message with an appropriate status code.
+    """
     try:
         if "file" not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
@@ -180,7 +221,15 @@ def api_convert():
 
 @app.route("/download/<filename>")
 def download_file(filename):
-    """Download converted Excel files."""
+    """
+    Download a previously generated Excel file by name.
+
+    Args:
+        filename: The generated Excel filename within the output folder.
+
+    Returns:
+        A Flask file download response, or a 404 JSON response if missing.
+    """
     try:
         file_path = os.path.join(OUTPUT_FOLDER, filename)
         if not os.path.exists(file_path):
@@ -199,7 +248,12 @@ def download_file(filename):
 
 @app.route("/health")
 def health_check():
-    """Basic health check endpoint."""
+    """
+    Basic health check endpoint.
+
+    Returns:
+        JSON payload with service status, timestamp, and version.
+    """
     return jsonify(
         {
             "status": "healthy",
@@ -228,7 +282,12 @@ def handle_exception(e):
 
 
 def cleanup_old_files(hours: int = 1):
-    """Remove files in upload/output folders older than `hours`."""
+    """
+    Remove old files from the upload and output directories.
+
+    Args:
+        hours: Age threshold in hours; files older than this are removed.
+    """
     import time
 
     cutoff = time.time() - hours * 3600

@@ -43,7 +43,7 @@ class TestEndToEndWebWorkflow:
         from io import BytesIO
         excel_data = BytesIO(response.data)
         
-        # Check that we can read the Excel file
+        # Verify the Excel file can be read
         excel_file = pd.ExcelFile(excel_data)
         assert "Summary" in excel_file.sheet_names
         assert "Orders" in excel_file.sheet_names
